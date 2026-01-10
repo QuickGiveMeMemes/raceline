@@ -1,0 +1,6 @@
+numpy
+matplotlib 
+gpxpy
+casadi
+PyQT5
+pyproj
