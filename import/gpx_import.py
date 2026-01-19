@@ -16,10 +16,43 @@ import plotly.graph_objects as go
 matplotlib.use("Qt5Agg")
 
 FILE = "Track.gpx"
-RESOLUTION = 10.0  # meters
+RESOLUTION = 15.0  # meters
+
+def parameterized_interpolation(track: list[np.ndarray]) -> np.ndarray:
+
+    l_init = track[0]
+    r_init = track[1]
+    c_init = track[2]
+    
+    # The arrays encode the path distances and spline point values for the center and both 
+    # bounds at an evenly spaced interval around the track. 
+    # Indexing is [l, r, c]
+    spl_dist, spl_pts, c_spline = interpolate(c_init, RESOLUTION, True)
+
+    # Generates high-resolution interpolations for the left and right boundaries, this will
+    # result in high accuracy for nearest-neighbor search and pairing.
+    _, l_fine_pts, _ = interpolate(l_init, spacing=0.5)
+    _, r_fine_pts, _ = interpolate(r_init, spacing=0.5)
+    l_fine_pts = np.asarray(l_fine_pts)
+    r_fine_pts = np.asarray(r_fine_pts)
+    
+    # Uses nearest-neighbor search to pair/unify the center points with boundary points for
+    # ribbon construction. The nearest neighbor on either boundary of a center point is assumed
+    # to be approximately orthogonal to the centerline.
+    l_nn = KDTree(np.transpose(l_fine_pts[:2]))
+    r_nn = KDTree(np.transpose(r_fine_pts[:2]))
+    _, l_nearest = l_nn.query(np.transpose(spl_pts[:2]))
+    _, r_nearest = r_nn.query(np.transpose(spl_pts[:2]))
 
 
-def interpolate(sample: np.ndarray, spacing: float = 0.1) -> np.ndarray:
+    l_spline, _ = splprep(l_fine_pts[:, l_nearest], u=spl_dist, s=0)
+    r_spline, _ = splprep(r_fine_pts[:, r_nearest], u=spl_dist, s=0)
+
+    # TODO remove most of these as they are debug/plot
+    return spl_dist[-1], l_spline, r_spline, c_spline, l_fine_pts[:, l_nearest], r_fine_pts[:, r_nearest], spl_pts
+
+
+def interpolate(sample: np.ndarray, spacing: float = 1.0, accurate_param=False) -> np.ndarray:
     """
     Fits polynomial splines to the given sample and returns a new array with
     evenly spaced points sampled from the splines. We approximate the total distance
@@ -32,20 +65,18 @@ def interpolate(sample: np.ndarray, spacing: float = 0.1) -> np.ndarray:
                                 of the first three values in each point assumed (x,y,z)
         spacing (float, optional):  The distance spacing between each of the points in the array
                                     that is returned. Defaults to 0.1.
+        accurate_param (bool):  Denotes whether or not the method will regenerate the spline based
+                                on accurate arc length parameterization
 
     Returns:
         np.ndarray: A set of evenly-spaced points along the interpolated spline
     """
 
-    # Creates the initial spline
-    # u is an NDArray that contains scipy's internal parameterization for every data point in sample
-    spline, u = splprep(sample, s=0, k=2, per=True)
-
-    # Samples very finely along the spline interpolation for accurate distance parameterization
-    u_fine = np.linspace(u.min(), u.max(), 1_000_000)
+    # Creates an initial spline approximation for a fine sampling of points along the spline.
+    # This way, we have an accurate arc length approximation to evenly space the points
+    spline, u = splprep(sample, s=0, k=3, per=True)
+    u_fine = np.linspace(u.min(), u.max(), 250_000)
     fine_sample = splev(u_fine, spline)
-
-    # Calculates Euclidian distance at each point in the fine sample
     dist = np.cumsum(
         np.sqrt(
             np.diff(fine_sample[0]) ** 2
@@ -55,19 +86,19 @@ def interpolate(sample: np.ndarray, spacing: float = 0.1) -> np.ndarray:
     )
     dist = np.insert(dist, 0, 0)  # 0 inserted for first point
 
-    # Calculates number of samples and generates distances to samplee at with even spacing
+    # Calculates number of samples and generates distances to sample at with even spacing according
+    # to arc length approximation, then maps arc length -> scipy parameterization
     samples = int(dist[-1] / spacing)
     target_dist = np.linspace(0, samples * spacing, samples + 1)
-
-    # Generates u_spaced by estimating the u parameterization based on the relationship between
-    # Euclidian distance (dist) and scipy parameterization u.
     u_spaced = np.interp(target_dist, dist, u_fine)
-    # u_spaced = np.append(u_spaced, u[-1])  # make sure end waypoint is preserved
 
     # Evaluates spline
     sampled = splev(u_spaced, spline)
 
-    # Returns Euclidean distance to each point and spline samples
+    # Reparameterizes the spline based on accurate arc length if the option is enabled
+    if accurate_param:
+        spline, _ = splprep(sampled, u=target_dist, s=0)
+
     return target_dist, sampled, spline
 
 
@@ -127,38 +158,42 @@ for i, c in enumerate(c_nearest):  # type: ignore
 
 track[2] = np.asarray(track[2])
 
-interpolated_track = []
-dists = []
-splines = []
+# interpolated_track = []
+# dists = []
+# splines = []
 
-for i, t in enumerate(track):
-    dist, sampled, spline = interpolate(t, 0.1 if i < 2 else RESOLUTION)  # type: ignore
+# for i, t in enumerate(track):
+#     dist, sampled, spline = interpolate(t, 0.1 if i < 2 else RESOLUTION)  # type: ignore
 
-    interpolated_track.append(sampled)
-    interpolated_track[i] = np.asarray(interpolated_track[i])
-    dists.append(dist)
-    splines.append(spline)
-
-
-out_nn = KDTree(np.transpose(interpolated_track[0][:2]))
-in_nn = KDTree(np.transpose(interpolated_track[1][:2]))
+#     interpolated_track.append(sampled)
+#     interpolated_track[i] = np.asarray(interpolated_track[i])
+#     dists.append(dist)
+#     splines.append(spline)
 
 
-_, o_nearest = out_nn.query(np.transpose(interpolated_track[2][:2]))
-_, i_nearest = in_nn.query(np.transpose(interpolated_track[2][:2]))
+# out_nn = KDTree(np.transpose(interpolated_track[0][:2]))
+# in_nn = KDTree(np.transpose(interpolated_track[1][:2]))
 
-# [out/1, in/r, center]
-s_track = [
-    interpolated_track[0][:, o_nearest],
-    interpolated_track[1][:, i_nearest],
-    interpolated_track[2],
-]
 
-print(len(interpolated_track[0][:, o_nearest]), len(dists[2]))
-print(s_track[0].shape, dists[2].shape)
-spline_l, _ = splprep(s_track[0], u=dists[2])
-spline_r, _ = splprep(s_track[1], u=dists[2])
-spline_c, _ = splprep(s_track[2], u=dists[2])
+# _, o_nearest = out_nn.query(np.transpose(interpolated_track[2][:2]))
+# _, i_nearest = in_nn.query(np.transpose(interpolated_track[2][:2]))
+
+# # [out/1, in/r, center]
+# s_track = [
+#     interpolated_track[0][:, o_nearest],
+#     interpolated_track[1][:, i_nearest],
+#     interpolated_track[2],
+# ]
+
+# print(len(interpolated_track[0][:, o_nearest]), len(dists[2]))
+# print(s_track[0].shape, dists[2].shape)
+# spline_l, _ = splprep(s_track[0], u=dists[2], s=0)
+# spline_r, _ = splprep(s_track[1], u=dists[2], s=0)
+# spline_c, _ = splprep(s_track[2], u=dists[2], s=0)
+
+s_track = [0,0,0]
+max_dist, spline_l, spline_r, spline_c, s_track[0], s_track[1], s_track[2] = parameterized_interpolation(track)
+
 
 plots = []
 # for t in interpolated_track:
@@ -171,7 +206,8 @@ for t in s_track:
     plots.append(go.Scatter3d(x=t[0], y=t[1], z=t[2], name="original"))
 
 for s in (spline_l, spline_r, spline_c):
-    x, y, z = splev(dists[2], s)
+    print(len(s))
+    x, y, z = splev(np.linspace(0, max_dist, (int)(max_dist // 5)), s)
     plots.append(go.Scatter3d(x=x, y=y, z=z, name="param splines"))
 
 
