@@ -189,6 +189,8 @@ def fit_iteration(
 
         tau, w = np.polynomial.legendre.leggauss(N[k])
         tau = np.asarray([-1] + list(tau) + [1])
+        # Global time at collocation points
+        t_tau = half_time_diff * tau + mid_time
 
         D = generate_D(tau)
 
@@ -208,23 +210,32 @@ def fit_iteration(
             opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
             opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
 
-        for i in range(1, N[k] + 1):
-            theta = Q[k][i, 0]
-            mu = Q[k][i, 1]
-            phi = Q[k][i, 2]
-            n_l = Q[k][i, 3]
-            n_r = Q[k][i, 4]
+        # Collocation constraints
+        theta = Q[k][1 : N[k] + 1, 0]
+        mu = Q[k][1 : N[k] + 1, 1]
 
-            opti.subject_to(dX[k][i, 0] == cos(theta) * cos(mu))
-            opti.subject_to(dX[k][i, 1] == sin(theta) * cos(mu))
-            opti.subject_to(dX[k][i, 2] == -sin(mu))
+        opti.subject_to(dX[k][1 : N[k] + 1, 0] == cos(theta) * cos(mu))
+        opti.subject_to(dX[k][1 : N[k] + 1, 1] == sin(theta) * cos(mu))
+        opti.subject_to(dX[k][1 : N[k] + 1, 2] == -sin(mu))
+        opti.subject_to(opti.bounded(-pi / 2 + 1e-3, mu, pi / 2 - 1e-3))
 
-            opti.subject_to([(-pi / 2) < mu, mu < (pi / 2)])
+        # for i in range(1, N[k] + 1):
+        #     theta = Q[k][i, 0]
+        #     mu = Q[k][i, 1]
+        #     phi = Q[k][i, 2]
+        #     n_l = Q[k][i, 3]
+        #     n_r = Q[k][i, 4]
+
+        #     opti.subject_to(dX[k][i, 0] == cos(theta) * cos(mu))
+        #     opti.subject_to(dX[k][i, 1] == sin(theta) * cos(mu))
+        #     opti.subject_to(dX[k][i, 2] == -sin(mu))
+
+        #     opti.subject_to([(-pi / 2) < mu, mu < (pi / 2)])
 
         for j in range(N[k]):
 
             lagrange_term = g(
-                half_time_diff * tau[j + 1] + mid_time,
+                t_tau[j + 1],
                 X[k][j + 1, :],
                 Q[k][j + 1, :],
                 ddQ[k][j + 1, :],
@@ -234,9 +245,16 @@ def fit_iteration(
             )
 
             J += half_time_diff * w[j] * lagrange_term
-        
+
         # Initial guess
-        opti.set_initial(X[k], np.asarray(splev(half_time_diff * tau + mid_time, spline_c)).T)
+        opti.set_initial(X[k], np.asarray(splev(t_tau, spline_c)).T)
+
+        # tangent = np.linalg.norm(np.asaray(splev(t_tau, spline_c, der=1)).T)
+        # normal = np.linalg.norm(
+        #     np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))
+        # )
+        # mu = asin(-tangent[2])
+        # opti.set_initial(Q[k][],)
 
     # Initial conditions
     x0 = splev(0, spline_c)
@@ -246,11 +264,9 @@ def fit_iteration(
     # Periodicity
     opti.subject_to(X[-1][N[-1] + 1, :] == X[0][0, :])
 
-
-    opti.subject_to(Q[-1][N[-1] + 1, 0] ==  Q[0][0, 0] + 2*pi)
+    opti.subject_to(Q[-1][N[-1] + 1, 0] == Q[0][0, 0] + 2 * pi)
     opti.subject_to(Q[-1][N[-1] + 1, 1:] == Q[0][0, 1:])
     opti.subject_to(dQ[-1][N[-1] + 1, :] == dQ[0][0, :])
-
 
     # Optimize!
 
@@ -295,6 +311,8 @@ if __name__ == "__main__":
     X, Q = fit_iteration(
         np.linspace(0, max_dist, 100), np.array([15] * 99), spline_c, spline_l, spline_r
     )
+
+    print(Q[0])
 
     plots = []
 
