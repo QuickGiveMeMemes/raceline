@@ -37,9 +37,9 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         spline_c: BSpline,
         spline_l: BSpline,
         spline_r: BSpline,
-        w_c: float = 1e-3,
-        w_l: float = 1e-3,
-        w_r: float = 1e-3,
+        w_c: float = 1e2,
+        w_l: float = 1e2,
+        w_r: float = 1e2,
     ) -> MX:
         """
         Computes tracking error
@@ -89,7 +89,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
             + w_r * ((b_r[0] - x_r) ** 2 + (b_r[1] - y_r) ** 2 + (b_r[2] - z_r) ** 2)
         )
 
-    def r_c(u, w_theta=3e3, w_mu=1e9, w_phi=1e9):
+    def r_c(u, w_theta=3e-1, w_mu=1e1, w_phi=1e1):
         """
         Computes the error term that penalizes track curvature
         r_c = w_theta * dd_theta^2 + w_mu * dd_mu^2 + w_phi * dd_phi^2
@@ -105,7 +105,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         """
         return w_theta * u[0] ** 2 + w_mu * u[1] ** 2 + w_phi * u[2] ** 2
 
-    def r_w(u, w_n_l=1e2, w_n_r=1e2):
+    def r_w(u, w_n_l=1e1, w_n_r=1e1):
         """
         Computes the error term that penalizes track boundary noise
         r_w = w_n_l * dd_n_l^2 + w_n_r * dd_n_r^2
@@ -181,30 +181,26 @@ def fit_iteration(
 
     J = 0
 
-
     # Constraints for each segment k
 
     for k in range(K):
         half_time_diff = (t[k + 1] - t[k]) / 2
         mid_time = (t[k + 1] + t[k]) / 2
 
-        # Configuration matrix Q and derivatives at tau_0 ... tau_N[k]+1
-        Q.append(opti.variable(N[k] + 2, n_q))
-        dQ.append(opti.variable(N[k] + 2, n_q))
-        ddQ.append(opti.variable(N[k] + 2, n_q))
-
-        # Euclidean state matrix X and derivatives at tau_0 ... tau_N[k]+1
-        X.append(opti.variable(N[k] + 2, n_x))
-        dX.append(opti.variable(N[k] + 2, n_x))
-
         tau, w = np.polynomial.legendre.leggauss(N[k])
         tau = np.asarray([-1] + list(tau) + [1])
 
         D = generate_D(tau)
 
-        opti.subject_to(dQ[k] == (2 / (t[k + 1] - t[k])) * mtimes(D, Q[k]))
-        opti.subject_to(ddQ[k] == 2 / (t[k + 1] - t[k]) * mtimes(D, dQ[k]))
-        opti.subject_to(dX[k] == (2 / (t[k + 1] - t[k])) * mtimes(D, X[k]))
+        # Configuration matrix Q and derivatives at tau_0 ... tau_N[k]+1
+        Q.append(opti.variable(N[k] + 2, n_q))
+
+        # Euclidean state matrix X and derivatives at tau_0 ... tau_N[k]+1
+        X.append(opti.variable(N[k] + 2, n_x))
+
+        dQ.append((2 / (t[k + 1] - t[k])) * mtimes(D, Q[k]))
+        ddQ.append(2 / (t[k + 1] - t[k]) * mtimes(D, dQ[k]))
+        dX.append((2 / (t[k + 1] - t[k])) * mtimes(D, X[k]))
 
         # Continuity constraints
         if k != 0:
@@ -212,18 +208,12 @@ def fit_iteration(
             opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
             opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
 
-        
-        # dx, dy, dz = spline_c.derivative()(0)
-        # mu =  np.asin(-dz)
-        # opti.subject_to(Q[0][0][i] == spline_c.derivative()(0))
-
-
-        for i in range(N[k] + 2):
+        for i in range(1, N[k] + 1):
             theta = Q[k][i, 0]
-            mu =    Q[k][i, 1]
-            phi =   Q[k][i, 2]
-            n_l =   Q[k][i, 3]
-            n_r =   Q[k][i, 4]
+            mu = Q[k][i, 1]
+            phi = Q[k][i, 2]
+            n_l = Q[k][i, 3]
+            n_r = Q[k][i, 4]
 
             opti.subject_to(dX[k][i, 0] == cos(theta) * cos(mu))
             opti.subject_to(dX[k][i, 1] == sin(theta) * cos(mu))
@@ -244,25 +234,27 @@ def fit_iteration(
             )
 
             J += half_time_diff * w[j] * lagrange_term
+        
+        # Initial guess
+        opti.set_initial(X[k], np.asarray(splev(half_time_diff * tau + mid_time, spline_c)).T)
 
     # Initial conditions
     x0 = splev(0, spline_c)
     for i in range(3):
-        opti.subject_to(X[0][0, i] == x0[i])            
-    
+        opti.subject_to(X[0][0, i] == x0[i])
 
     # Periodicity
-    opti.subject_to(X[-1][N[k] + 1, :] == X[0][0, :])
-    opti.subject_to(Q[-1][N[k] + 1, :] == Q[0][0, :])
-    opti.subject_to(dQ[-1][N[k] + 1, :] == dQ[0][0, :])
+    opti.subject_to(X[-1][N[-1] + 1, :] == X[0][0, :])
+
+
+    opti.subject_to(Q[-1][N[-1] + 1, 0] ==  Q[0][0, 0] + 2*pi)
+    opti.subject_to(Q[-1][N[-1] + 1, 1:] == Q[0][0, 1:])
+    opti.subject_to(dQ[-1][N[-1] + 1, :] == dQ[0][0, :])
+
 
     # Optimize!
 
-    solver_options = {
-        'ipopt.print_level': 5,
-        'print_time': 0,
-        'ipopt.sb': 'no'
-    }
+    solver_options = {"ipopt.print_level": 5, "print_time": 0, "ipopt.sb": "no"}
 
     opti.minimize(J)
     opti.solver("ipopt", solver_options)
@@ -284,6 +276,7 @@ def fit_iteration(
 
     return np.asarray(solution_x), np.asarray(solution_q)
 
+
 if __name__ == "__main__":
     from gpx_import import read_gpx_splines
     import plotly.graph_objects as go
@@ -299,21 +292,23 @@ if __name__ == "__main__":
         s_track[2],
     ) = read_gpx_splines("Monza_better.gpx")
 
-    X, Q = fit_iteration(np.linspace(0, max_dist, 50), np.array([5]*49), spline_c, spline_l, spline_r)
+    X, Q = fit_iteration(
+        np.linspace(0, max_dist, 100), np.array([15] * 99), spline_c, spline_l, spline_r
+    )
 
     plots = []
 
     plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
 
-    plots.append(go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original"))
-    
+    plots.append(
+        go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original")
+    )
+
     fig = go.Figure(data=plots)
     fig.update_layout(scene=dict(aspectmode="data"))
 
     fig.show()
-    
+
     # position = []
-    
+
     # for theta, mu, phi, _, _ in Q:
-
-
