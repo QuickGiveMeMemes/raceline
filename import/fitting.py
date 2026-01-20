@@ -37,9 +37,9 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         spline_c: BSpline,
         spline_l: BSpline,
         spline_r: BSpline,
-        w_c: float = 1e2,
-        w_l: float = 1e2,
-        w_r: float = 1e2,
+        w_c: float = 1e1,
+        w_l: float = 1e-3,
+        w_r: float = 1e-3,
     ) -> MX:
         """
         Computes tracking error
@@ -89,7 +89,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
             + w_r * ((b_r[0] - x_r) ** 2 + (b_r[1] - y_r) ** 2 + (b_r[2] - z_r) ** 2)
         )
 
-    def r_c(u, w_theta=3e-1, w_mu=1e1, w_phi=1e1):
+    def r_c(u, w_theta=3e3, w_mu=1e9, w_phi=1e9):
         """
         Computes the error term that penalizes track curvature
         r_c = w_theta * dd_theta^2 + w_mu * dd_mu^2 + w_phi * dd_phi^2
@@ -105,7 +105,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         """
         return w_theta * u[0] ** 2 + w_mu * u[1] ** 2 + w_phi * u[2] ** 2
 
-    def r_w(u, w_n_l=1e1, w_n_r=1e1):
+    def r_w(u, w_n_l=1e2, w_n_r=1e2):
         """
         Computes the error term that penalizes track boundary noise
         r_w = w_n_l * dd_n_l^2 + w_n_r * dd_n_r^2
@@ -150,7 +150,7 @@ def generate_D(tau) -> np.ndarray:
         for j in range(len(tau)):
             if i != j:
                 D[i, j] = w[j] / w[i] / (tau[i] - tau[j])
-        D[j, j] = -np.sum(D[i, :])
+        D[i, i] = -np.sum(D[i, :])
     return D
 
 
@@ -234,6 +234,9 @@ def fit_iteration(
 
         #     opti.subject_to([(-pi / 2) < mu, mu < (pi / 2)])
 
+        # Defect constraints (why)
+        defect = X[k][0, :]
+
         for j in range(N[k]):
 
             lagrange_term = g(
@@ -247,6 +250,17 @@ def fit_iteration(
             )
 
             J += half_time_diff * w[j] * lagrange_term
+
+            dy_term = horzcat(
+                cos(theta[j, 0]) * cos(mu[j, 0]),
+                sin(theta[j, 0]) * cos(mu[j, 0]),
+                -sin(mu[j, 0])
+            )
+            defect += half_time_diff * w[j] * dy_term
+        
+        # Note: by continuity constraints it is guaranteed X[k + 1][0, :] == X[k][-1, :]
+        opti.subject_to(defect == X[k][-1, :])
+
 
         # Initial guesses
         opti.set_initial(X[k], np.asarray(splev(t_tau, spline_c)).T)
@@ -292,13 +306,18 @@ def fit_iteration(
     opti.subject_to(Q[-1][N[-1] + 1, 1:] == Q[0][0, 1:])
     opti.subject_to(dQ[-1][N[-1] + 1, :] == dQ[0][0, :])
 
+
+
     # Optimize!
 
-    solver_options = {"ipopt.print_level": 5, "print_time": 0, "ipopt.sb": "no"}
+    solver_options = {"ipopt.print_level": 5, "print_time": 0, "ipopt.sb": "no", 'ipopt.max_iter': 1000}
 
     opti.minimize(J)
     opti.solver("ipopt", solver_options)
-    sol = opti.solve()
+    try:
+        sol = opti.solve()
+    except:
+        sol = opti.debug
 
     solution_x = []
     solution_q = []
@@ -315,6 +334,32 @@ def fit_iteration(
             solution_x.append(segment_x[i, :])
 
     return np.asarray(solution_x), np.asarray(solution_q)
+
+def plot(plots, X, Q):
+    import plotly.graph_objects as go
+
+    theta = Q[:, 0]
+    mu = Q[:, 1]
+    phi = Q[:, 2]
+    n_l = Q[:, 3]
+    n_r = Q[:, 4]
+
+    n = horzcat(
+        cos(theta) * sin(mu) * sin(phi) - sin(theta) * cos(phi),
+        sin(theta) * sin(mu) * sin(phi) + cos(theta) * cos(phi),
+        cos(mu) * sin(phi),
+    )
+
+    b_l = np.asarray(X + n * n_l)
+    b_r = np.asarray(X + n * n_r)
+
+    print(b_l, b_r)
+
+
+    plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
+    plots.append(go.Scatter3d(x=b_l[:, 0], y=b_l[:, 1], z=b_l[:, 2], name="left"))
+    plots.append(go.Scatter3d(x=b_r[:, 0], y=b_r[:, 1], z=b_r[:, 2], name="right"))
+
 
 
 if __name__ == "__main__":
@@ -333,14 +378,16 @@ if __name__ == "__main__":
     ) = read_gpx_splines("Monza_better.gpx")
 
     X, Q = fit_iteration(
-        np.linspace(0, max_dist, 100), np.array([15] * 99), spline_c, spline_l, spline_r
+        np.linspace(0, max_dist, 70), np.array([15] * 69), spline_c, spline_l, spline_r
     )
 
     print(Q[0])
 
     plots = []
 
-    plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
+    plot(plots, X, Q)
+
+    # plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
 
     plots.append(
         go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original")
