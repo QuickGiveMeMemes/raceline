@@ -136,19 +136,21 @@ def generate_D(tau) -> np.ndarray:
         D (np.ndarray): Differentiation matrix
     """
     D = np.zeros((len(tau), len(tau)))
+    w = np.zeros(len(tau))
+    # Precomputes Barycentric weights (denom) for fp/numeric stability
 
     for j in range(len(tau)):
-        L_j = np.poly1d([1])
-
+        p = 1.0
         for i in range(len(tau)):
             if i != j:
-                L_j *= np.poly1d([1, -tau[i]]) / (tau[j] - tau[i])
+                p *= (tau[j] - tau[i])
+        w[j] = 1.0 / p
 
-        dL_j = np.polyder(L_j)
-
-        for i in range(len(tau)):
-            D[i, j] = dL_j(tau[i])
-
+    for i in range(len(tau)):
+        for j in range(len(tau)):
+            if i != j:
+                D[i, j] = w[j] / w[i] / (tau[i] - tau[j])
+        D[j, j] = -np.sum(D[i, :])
     return D
 
 
@@ -246,15 +248,37 @@ def fit_iteration(
 
             J += half_time_diff * w[j] * lagrange_term
 
-        # Initial guess
+        # Initial guesses
         opti.set_initial(X[k], np.asarray(splev(t_tau, spline_c)).T)
 
-        # tangent = np.linalg.norm(np.asaray(splev(t_tau, spline_c, der=1)).T)
-        # normal = np.linalg.norm(
-        #     np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))
-        # )
-        # mu = asin(-tangent[2])
-        # opti.set_initial(Q[k][],)
+        tangent = np.asarray(splev(t_tau, spline_c, der=1)).T
+        tangent = tangent / np.linalg.norm(tangent, axis=1)[:, np.newaxis]
+        normal = (
+            (np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))).T
+        )
+        normal = normal / np.linalg.norm(normal, axis=1)[:, np.newaxis]
+
+        mu_guess = np.asin(-tangent[:, 2])
+        theta_guess = np.asin(tangent[:, 1] / np.cos(mu_guess))
+        phi_guess = np.asin(normal[:, 2] / np.cos(mu_guess))
+
+        # print(tangent, normal, mu_guess, theta_guess, phi_guess)
+
+        opti.set_initial(Q[k][:, 0], theta_guess)
+        opti.set_initial(Q[k][:, 1], mu_guess)
+        opti.set_initial(Q[k][:, 2], phi_guess)
+
+        nl_guess = np.linalg.norm(
+            (np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))).T,
+            axis=1,
+        )
+        nr_guess = -np.linalg.norm(
+            (np.asarray(splev(t_tau, spline_r)) - np.asarray(splev(t_tau, spline_c))).T,
+            axis=1,
+        )
+
+        opti.set_initial(Q[k][:, 3], nl_guess)
+        opti.set_initial(Q[k][:, 4], nr_guess)
 
     # Initial conditions
     x0 = splev(0, spline_c)
