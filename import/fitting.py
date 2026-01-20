@@ -1,0 +1,319 @@
+# import casadi as ca
+from casadi import *
+import numpy as np
+from scipy.interpolate import splev, BSpline
+
+# Number of elements in configuration and euclidean state
+n_q = 5
+n_x = 3
+
+
+def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline):
+    """
+    Calculates path error g(t) at a specific t.
+    For track fitting, used both for computing the symbolic cost in CasADi
+    for optimization and evaluating the numeric generated cost for
+    hp-refinement.
+    g(t)
+
+    Args:
+        t (float): Arc length parameter
+        x (CasADi Expression | np.ndarray): Vector containing [x, y, z]
+        q (CasADi Expression | np.ndarray): Vector containing [θ, μ, Φ]
+        u (CasADi Expression | np.ndarray): The control vector of second derivatives. u = ddq
+        spline_c (BSpline): Scipy BSpline for center line
+        spline_l (BSpline): Scipy BSpline for left boundary
+        spline_r (BSpline): Scipy BSpline for right boundary
+
+    Returns:
+        CasADi Expression | float: g(.)
+    """
+
+    # ==================== Start Defining sub-error functions ====================
+    def e(
+        t: float,
+        x,
+        q,
+        spline_c: BSpline,
+        spline_l: BSpline,
+        spline_r: BSpline,
+        w_c: float = 1e-3,
+        w_l: float = 1e-3,
+        w_r: float = 1e-3,
+    ) -> MX:
+        """
+        Computes tracking error
+        e = w_c ||x - c_spline(t)||^2 + w_l ||b_l - l_spline(t)||^2 + w_r ||b_r - r_spline(t)||^2
+        where
+        b_l = x + n * n_l
+        b_r = x + n * n_r
+        n = second column of Euler Rotation Matrix
+
+        Args:
+            t (float): Arc length parameter
+            x (CasADi Expression | np.ndarray): Vector containing [x, y, z]
+            q (CasADi Expression | np.ndarray): Vector containing [theta, mu, phi]
+            spline_c (BSpline): Scipy BSpline for center line
+            spline_l (BSpline): Scipy BSpline for left boundary
+            spline_r (BSpline): Scipy BSpline for right boundary
+            w_c (float, optional): Defaults to 1e-3.
+            w_l (float, optional): Defaults to 1e-3.
+            w_r (float, optional): Defaults to 1e-3.
+
+        Returns:
+            CasADi Expression | np.ndarray: Tracking error
+        """
+
+        theta = q[0]
+        mu = q[1]
+        phi = q[2]
+        n_l = q[3]
+        n_r = q[4]
+
+        n = vertcat(
+            cos(theta) * sin(mu) * sin(phi) - sin(theta) * cos(phi),
+            sin(theta) * sin(mu) * sin(phi) + cos(theta) * cos(phi),
+            cos(mu) * sin(phi),
+        )
+
+        b_l = x.T + n * n_l
+        b_r = x.T + n * n_r
+
+        x_c, y_c, z_c = splev(t, spline_c)
+        x_l, y_l, z_l = splev(t, spline_l)
+        x_r, y_r, z_r = splev(t, spline_r)
+
+        return (
+            w_c * ((x[0] - x_c) ** 2 + (x[1] - y_c) ** 2 + (x[2] - z_c) ** 2)
+            + w_l * ((b_l[0] - x_l) ** 2 + (b_l[1] - y_l) ** 2 + (b_l[2] - z_l) ** 2)
+            + w_r * ((b_r[0] - x_r) ** 2 + (b_r[1] - y_r) ** 2 + (b_r[2] - z_r) ** 2)
+        )
+
+    def r_c(u, w_theta=3e3, w_mu=1e9, w_phi=1e9):
+        """
+        Computes the error term that penalizes track curvature
+        r_c = w_theta * dd_theta^2 + w_mu * dd_mu^2 + w_phi * dd_phi^2
+
+        Args:
+            u (CasADi Expression | np.ndarray): The control vector of second derivatives. u = ddq
+            w_theta (float, optional): Defaults to 3e3.
+            w_mu (float, optional): Defaults to 1e9.
+            w_phi (float, optional): Defaults to 1e9.
+
+        Returns:
+            CasADi Expression | np.ndarray: r_c
+        """
+        return w_theta * u[0] ** 2 + w_mu * u[1] ** 2 + w_phi * u[2] ** 2
+
+    def r_w(u, w_n_l=1e2, w_n_r=1e2):
+        """
+        Computes the error term that penalizes track boundary noise
+        r_w = w_n_l * dd_n_l^2 + w_n_r * dd_n_r^2
+
+        Args:
+            u (CasADi Expression | np.ndarray): The control vector of second derivatives. u = ddq
+            w_n_l (_type_, optional): Defaults to 1e2.
+            w_n_r (_type_, optional): Defaults to 1e2.
+
+        Returns:
+            CasADi Expression | np.ndarray: r_w
+        """
+        return w_n_l * u[3] ** 2 + w_n_r * u[4] ** 2
+
+    # ==================== End Defining sub-error functions ====================
+
+    return e(t, x, q, spline_c, spline_l, spline_r) + r_c(u) + r_w(u)
+
+
+def generate_D(tau) -> np.ndarray:
+    """
+    Generates differentiation matrix
+
+    Args:
+        tau (np.ndarray): 1D numpy array containing LG points and -1 and 1
+
+    Returns:
+        D (np.ndarray): Differentiation matrix
+    """
+    D = np.zeros((len(tau), len(tau)))
+
+    for j in range(len(tau)):
+        L_j = np.poly1d([1])
+
+        for i in range(len(tau)):
+            if i != j:
+                L_j *= np.poly1d([1, -tau[i]]) / (tau[j] - tau[i])
+
+        dL_j = np.polyder(L_j)
+
+        for i in range(len(tau)):
+            D[i, j] = dL_j(tau[i])
+
+    return D
+
+
+def fit_iteration(
+    t: np.ndarray,
+    N: np.ndarray,
+    spline_c: BSpline,
+    spline_l: BSpline,
+    spline_r: BSpline,
+):
+    """
+    Runs a single iteration of hp-adpative pseudospectral collocation
+
+    Args:
+        t (np.ndarray): 1D numpy array containing the mesh points
+        N (np.ndarray): 1D numpy array containing the number of collocation points in each interval
+
+
+    Returns:
+        tbd
+    """
+    opti = Opti()
+
+    K = len(N)
+    Q = []
+    dQ = []
+    ddQ = []
+    X = []
+    dX = []
+
+    J = 0
+
+
+    # Constraints for each segment k
+
+    for k in range(K):
+        half_time_diff = (t[k + 1] - t[k]) / 2
+        mid_time = (t[k + 1] + t[k]) / 2
+
+        # Configuration matrix Q and derivatives at tau_0 ... tau_N[k]+1
+        Q.append(opti.variable(N[k] + 2, n_q))
+        dQ.append(opti.variable(N[k] + 2, n_q))
+        ddQ.append(opti.variable(N[k] + 2, n_q))
+
+        # Euclidean state matrix X and derivatives at tau_0 ... tau_N[k]+1
+        X.append(opti.variable(N[k] + 2, n_x))
+        dX.append(opti.variable(N[k] + 2, n_x))
+
+        tau, w = np.polynomial.legendre.leggauss(N[k])
+        tau = np.asarray([-1] + list(tau) + [1])
+
+        D = generate_D(tau)
+
+        opti.subject_to(dQ[k] == (2 / (t[k + 1] - t[k])) * mtimes(D, Q[k]))
+        opti.subject_to(ddQ[k] == 2 / (t[k + 1] - t[k]) * mtimes(D, dQ[k]))
+        opti.subject_to(dX[k] == (2 / (t[k + 1] - t[k])) * mtimes(D, X[k]))
+
+        # Continuity constraints
+        if k != 0:
+            opti.subject_to(X[k - 1][-1, :] == X[k][0, :])
+            opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
+            opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
+
+        
+        # dx, dy, dz = spline_c.derivative()(0)
+        # mu =  np.asin(-dz)
+        # opti.subject_to(Q[0][0][i] == spline_c.derivative()(0))
+
+
+        for i in range(N[k] + 2):
+            theta = Q[k][i, 0]
+            mu =    Q[k][i, 1]
+            phi =   Q[k][i, 2]
+            n_l =   Q[k][i, 3]
+            n_r =   Q[k][i, 4]
+
+            opti.subject_to(dX[k][i, 0] == cos(theta) * cos(mu))
+            opti.subject_to(dX[k][i, 1] == sin(theta) * cos(mu))
+            opti.subject_to(dX[k][i, 2] == -sin(mu))
+
+            opti.subject_to([(-pi / 2) < mu, mu < (pi / 2)])
+
+        for j in range(N[k]):
+
+            lagrange_term = g(
+                half_time_diff * tau[j + 1] + mid_time,
+                X[k][j + 1, :],
+                Q[k][j + 1, :],
+                ddQ[k][j + 1, :],
+                spline_c,
+                spline_l,
+                spline_r,
+            )
+
+            J += half_time_diff * w[j] * lagrange_term
+
+    # Initial conditions
+    x0 = splev(0, spline_c)
+    for i in range(3):
+        opti.subject_to(X[0][0, i] == x0[i])            
+    
+
+    # Periodicity
+    opti.subject_to(X[-1][N[k] + 1, :] == X[0][0, :])
+    opti.subject_to(Q[-1][N[k] + 1, :] == Q[0][0, :])
+    opti.subject_to(dQ[-1][N[k] + 1, :] == dQ[0][0, :])
+
+    # Optimize!
+
+    solver_options = {
+        'ipopt.print_level': 5,
+        'print_time': 0,
+        'ipopt.sb': 'no'
+    }
+
+    opti.minimize(J)
+    opti.solver("ipopt", solver_options)
+    sol = opti.solve()
+
+    solution_x = []
+    solution_q = []
+
+    for k, segment_q in enumerate(Q):
+        segment_q = sol.value(segment_q)
+        for i in range(N[k]):
+            solution_q.append(segment_q[i, :])
+
+    for k, segment_x in enumerate(X):
+        segment_x = sol.value(segment_x)
+
+        for i in range(N[k]):
+            solution_x.append(segment_x[i, :])
+
+    return np.asarray(solution_x), np.asarray(solution_q)
+
+if __name__ == "__main__":
+    from gpx_import import read_gpx_splines
+    import plotly.graph_objects as go
+
+    s_track = [0, 0, 0]
+    track, (
+        max_dist,
+        spline_l,
+        spline_r,
+        spline_c,
+        s_track[0],
+        s_track[1],
+        s_track[2],
+    ) = read_gpx_splines("Monza_better.gpx")
+
+    X, Q = fit_iteration(np.linspace(0, max_dist, 50), np.array([5]*49), spline_c, spline_l, spline_r)
+
+    plots = []
+
+    plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
+
+    plots.append(go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original"))
+    
+    fig = go.Figure(data=plots)
+    fig.update_layout(scene=dict(aspectmode="data"))
+
+    fig.show()
+    
+    # position = []
+    
+    # for theta, mu, phi, _, _ in Q:
+
+

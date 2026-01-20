@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 
 matplotlib.use("Qt5Agg")
 
-FILE = "Track.gpx"
+FILE = "Monza_better.gpx"
 RESOLUTION = 15.0  # meters
 
 
@@ -139,25 +139,46 @@ def read_gpx_splines(source):
     track: list[list | np.ndarray] = [[[], [], []], [[], [], []], [[], [], []]]
 
     # Fills in track, generates x, y, z coordinates from (lat, long, elev)
-    for t in gpx.tracks:
-        if t.name == "Outside":
-            i = 0
-        elif t.name == "Inside":
-            i = 1
-        else:
-            raise ValueError(f"{FILE} must contain only tracks 'Outside' and 'Inside'")
+    if len(gpx.tracks) > 0:
+        for t in gpx.tracks:
+            if t.name == "Outside":
+                i = 0
+            elif t.name == "Inside":
+                i = 1
+            else:
+                raise ValueError(f"{FILE} must contain only tracks 'Outside' and 'Inside'")
 
-        for s in t.segments:
-            for p in s.points:
+            for s in t.segments:
+                for p in s.points:
+                    x, y = trm.transform(p.longitude, p.latitude)
+
+                    # Shifts coordinates according to global zero
+                    track[i][0].append(x)
+                    track[i][1].append(y)
+                    track[i][2].append(p.elevation)
+            track[i] = np.asarray(track[i])
+    else:
+        # gpx file uses routes
+        for t in gpx.routes:
+            if t.name == "Outside":
+                i = 0
+            elif t.name == "Inside":
+                i = 1
+            else:
+                raise ValueError(f"{FILE} must contain only tracks 'Outside' and 'Inside'")
+            
+            for p in t.points:
                 x, y = trm.transform(p.longitude, p.latitude)
 
                 # Shifts coordinates according to global zero
                 track[i][0].append(x)
                 track[i][1].append(y)
                 track[i][2].append(p.elevation)
-        track[i] = np.asarray(track[i])
+            track[i] = np.asarray(track[i])
+        
 
     # Set minimum elevation to 0
+    print(len(track[0][2]), len(track[1][2]))
     z_min = min(np.min(track[0][2]), np.min(track[1][2]))
     track[0][2] -= z_min
     track[1][2] -= z_min
