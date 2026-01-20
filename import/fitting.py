@@ -143,7 +143,7 @@ def generate_D(tau) -> np.ndarray:
         p = 1.0
         for i in range(len(tau)):
             if i != j:
-                p *= (tau[j] - tau[i])
+                p *= tau[j] - tau[i]
         w[j] = 1.0 / p
 
     for i in range(len(tau)):
@@ -183,6 +183,10 @@ def fit_iteration(
 
     J = 0
 
+
+    # for initial guess
+    theta_accum = []
+
     # Constraints for each segment k
 
     for k in range(K):
@@ -195,7 +199,6 @@ def fit_iteration(
         t_tau = half_time_diff * tau + mid_time
 
         D = generate_D(tau)
-
 
         if k == 0:
             Q.append(opti.variable(N[k] + 2, n_q))
@@ -210,18 +213,19 @@ def fit_iteration(
         dX.append((2 / (t[k + 1] - t[k])) * mtimes(D, X[k]))
 
         # Continuity constraints
-        # if k != 0:
-        #     opti.subject_to(X[k - 1][-1, :] == X[k][0, :])
-        #     opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
-        #     opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
+        if k != 0:
+            #     opti.subject_to(X[k - 1][-1, :] == X[k][0, :])
+            #     opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
+            opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
+            # opti.subject_to(ddQ[k - 1][-1, :] == ddQ[k][0, :])
 
         # Collocation constraints
-        theta = Q[k][1 : -1, 0]
-        mu = Q[k][1 : -1, 1]
+        theta = Q[k][:-1, 0]
+        mu = Q[k][:-1, 1]
 
-        opti.subject_to(dX[k][1 : -1, 0] == cos(theta) * cos(mu))
-        opti.subject_to(dX[k][1 : -1, 1] == sin(theta) * cos(mu))
-        opti.subject_to(dX[k][1 : -1, 2] == -sin(mu))
+        opti.subject_to(dX[k][:-1, 0] == cos(theta) * cos(mu))
+        opti.subject_to(dX[k][:-1, 1] == sin(theta) * cos(mu))
+        opti.subject_to(dX[k][:-1, 2] == -sin(mu))
         opti.subject_to(opti.bounded(-pi / 2 + 1e-3, mu, pi / 2 - 1e-3))
 
         # for i in range(1, N[k] + 1):
@@ -238,7 +242,7 @@ def fit_iteration(
         #     opti.subject_to([(-pi / 2) < mu, mu < (pi / 2)])
 
         # Quadrature enforcement
-        defect = X[k][0, :]
+        # defect = X[k][0, :]
 
         for j in range(N[k]):
 
@@ -254,16 +258,15 @@ def fit_iteration(
 
             J += half_time_diff * w[j] * lagrange_term
 
-            dy_term = horzcat(
-                cos(theta[j, 0]) * cos(mu[j, 0]),
-                sin(theta[j, 0]) * cos(mu[j, 0]),
-                -sin(mu[j, 0])
-            )
-            defect += half_time_diff * w[j] * dy_term
-        
-        # Note: by continuity constraints it is guaranteed X[k + 1][0, :] == X[k][-1, :]
-        opti.subject_to(defect == X[k][-1, :])
+            # dy_term = horzcat(
+            #     cos(theta[j, 0]) * cos(mu[j, 0]),
+            #     sin(theta[j, 0]) * cos(mu[j, 0]),
+            #     -sin(mu[j, 0])
+            # )
+            # defect += half_time_diff * w[j] * dy_term
 
+        # Note: by continuity constraints it is guaranteed X[k + 1][0, :] == X[k][-1, :]
+        # opti.subject_to(defect == X[k][-1, :])
 
         # Initial guesses
         opti.set_initial(X[k], np.asarray(splev(t_tau, spline_c)).T)
@@ -271,17 +274,25 @@ def fit_iteration(
         tangent = np.asarray(splev(t_tau, spline_c, der=1)).T
         tangent = tangent / np.linalg.norm(tangent, axis=1)[:, np.newaxis]
         normal = (
-            (np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))).T
-        )
+            np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))
+        ).T
         normal = normal / np.linalg.norm(normal, axis=1)[:, np.newaxis]
 
         mu_guess = np.asin(-tangent[:, 2])
-        theta_guess = np.asin(tangent[:, 1] / np.cos(mu_guess))
+        theta_guess = np.arctan2(tangent[:, 1], tangent[:, 0])
         phi_guess = np.asin(normal[:, 2] / np.cos(mu_guess))
 
-        # print(tangent, normal, mu_guess, theta_guess, phi_guess)
+        # theta needs accumulation
+        # theta_guess = np.cumsum(theta_guess)
 
-        opti.set_initial(Q[k][:, 0], theta_guess)
+        # print(f"k={k}")
+        # print(tangent[0], normal[0], mu_guess[0], theta_guess[0], phi_guess[0])
+        # if k == K - 1:
+        #     print("k=last")
+        #     print(tangent[-1], normal[-1], mu_guess[-1], theta_guess[-1], phi_guess[-1])
+
+        theta_accum.append(theta_guess)
+        # opti.set_initial(Q[k][:, 0], theta_guess)
         opti.set_initial(Q[k][:, 1], mu_guess)
         opti.set_initial(Q[k][:, 2], phi_guess)
 
@@ -297,6 +308,22 @@ def fit_iteration(
         opti.set_initial(Q[k][:, 3], nl_guess)
         opti.set_initial(Q[k][:, 4], nr_guess)
 
+    # Unwrapping / removing theta jump discontinuity
+    last = theta_accum[0][0]
+    for k, seg in enumerate(theta_accum):
+        for i, theta in enumerate(seg):
+            diff = theta - last
+            while diff > np.pi or diff < -np.pi:
+                if diff > np.pi:
+                    seg[i] -= 2 * np.pi
+                elif diff < -np.pi:
+                    seg[i] += 2 * np.pi
+                diff = seg[i] - last
+            last = seg[i]
+        opti.set_initial(Q[k][:, 0], seg)
+        print(seg[0])
+    print(theta_accum[-1][-1])
+
     # Initial conditions
     x0 = splev(0, spline_c)
     for i in range(3):
@@ -305,15 +332,26 @@ def fit_iteration(
     # Periodicity
     opti.subject_to(X[-1][-1, :] == X[0][0, :])
 
-    opti.subject_to(Q[-1][-1, 0] == Q[0][0, 0] + 2 * pi)
+    # opti.subject_to(sin(Q[-1][-1, 0]) == sin(Q[0][0, 0]))
+    # opti.subject_to(cos(Q[-1][-1, 0]) == cos(Q[0][0, 0]))
+    opti.subject_to(Q[-1][-1, 0] == Q[0][0, 0] - 2 * pi)
     opti.subject_to(Q[-1][-1, 1:] == Q[0][0, 1:])
     opti.subject_to(dQ[-1][-1, :] == dQ[0][0, :])
-
-
+    # opti.subject_to(ddQ[-1][-1, :] == ddQ[0][0, :])
 
     # Optimize!
 
-    solver_options = {"ipopt.print_level": 5, "print_time": 0, "ipopt.sb": "no", 'ipopt.max_iter': 1000, "detect_simple_bounds": True}
+    solver_options = {
+        "ipopt.print_level": 5,
+        "print_time": 0,
+        "ipopt.sb": "no",
+        "ipopt.max_iter": 1000,
+        "detect_simple_bounds": True,
+        'ipopt.mu_strategy': 'adaptive',
+        'ipopt.nlp_scaling_method': 'gradient-based',
+        'ipopt.bound_relax_factor': 1e-8, 
+        'ipopt.honor_original_bounds': 'yes',
+    }
 
     opti.minimize(J)
     opti.solver("ipopt", solver_options)
@@ -327,16 +365,17 @@ def fit_iteration(
 
     for k, segment_q in enumerate(Q):
         segment_q = sol.value(segment_q)
-        for i in range(N[k]):
+        for i in range(N[k] + 2):
             solution_q.append(segment_q[i, :])
 
     for k, segment_x in enumerate(X):
         segment_x = sol.value(segment_x)
 
-        for i in range(N[k]):
+        for i in range(N[k] + 2):
             solution_x.append(segment_x[i, :])
 
     return np.asarray(solution_x), np.asarray(solution_q)
+
 
 def plot(plots, X, Q):
     import plotly.graph_objects as go
@@ -358,11 +397,9 @@ def plot(plots, X, Q):
 
     # print(b_l, b_r)
 
-
     plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
     plots.append(go.Scatter3d(x=b_l[:, 0], y=b_l[:, 1], z=b_l[:, 2], name="left"))
     plots.append(go.Scatter3d(x=b_r[:, 0], y=b_r[:, 1], z=b_r[:, 2], name="right"))
-
 
 
 if __name__ == "__main__":
@@ -381,7 +418,7 @@ if __name__ == "__main__":
     ) = read_gpx_splines("Monza_better.gpx")
 
     X, Q = fit_iteration(
-        np.linspace(0, max_dist, 70), np.array([15] * 69), spline_c, spline_l, spline_r
+        np.linspace(0, max_dist, 40), np.array([5] * 39), spline_c, spline_l, spline_r
     )
 
     # print(Q[0])
@@ -399,11 +436,13 @@ if __name__ == "__main__":
         go.Scatter3d(x=track[1][0], y=track[1][1], z=track[1][2], name="original right")
     )
     plots.append(
-        go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original center")
+        go.Scatter3d(
+            x=track[2][0], y=track[2][1], z=track[2][2], name="original center"
+        )
     )
 
     fig = go.Figure(data=plots)
-    # fig.update_layout(scene=dict(aspectmode="data"))
+    fig.update_layout(scene=dict(aspectmode="data"))
 
     fig.show()
 
