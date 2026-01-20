@@ -381,7 +381,7 @@ if __name__ == "__main__":
         np.linspace(0, max_dist, 70), np.array([15] * 69), spline_c, spline_l, spline_r
     )
 
-    print(Q[0])
+    # print(Q[0])
 
     plots = []
 
@@ -390,11 +390,17 @@ if __name__ == "__main__":
     # plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
 
     plots.append(
-        go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original")
+        go.Scatter3d(x=track[0][0], y=track[0][1], z=track[0][2], name="original left")
+    )
+    plots.append(
+        go.Scatter3d(x=track[1][0], y=track[1][1], z=track[1][2], name="original right")
+    )
+    plots.append(
+        go.Scatter3d(x=track[2][0], y=track[2][1], z=track[2][2], name="original center")
     )
 
     fig = go.Figure(data=plots)
-    fig.update_layout(scene=dict(aspectmode="data"))
+    # fig.update_layout(scene=dict(aspectmode="data"))
 
     fig.show()
 
