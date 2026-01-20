@@ -196,29 +196,32 @@ def fit_iteration(
 
         D = generate_D(tau)
 
-        # Configuration matrix Q and derivatives at tau_0 ... tau_N[k]+1
-        Q.append(opti.variable(N[k] + 2, n_q))
 
-        # Euclidean state matrix X and derivatives at tau_0 ... tau_N[k]+1
-        X.append(opti.variable(N[k] + 2, n_x))
+        if k == 0:
+            Q.append(opti.variable(N[k] + 2, n_q))
+            X.append(opti.variable(N[k] + 2, n_x))
+        else:
+            # Explicitly couples last of previous segment with first of current segment
+            Q.append(vertcat(Q[k - 1][-1, :], opti.variable(N[k] + 1, n_q)))
+            X.append(vertcat(X[k - 1][-1, :], opti.variable(N[k] + 1, n_x)))
 
         dQ.append((2 / (t[k + 1] - t[k])) * mtimes(D, Q[k]))
         ddQ.append(2 / (t[k + 1] - t[k]) * mtimes(D, dQ[k]))
         dX.append((2 / (t[k + 1] - t[k])) * mtimes(D, X[k]))
 
         # Continuity constraints
-        if k != 0:
-            opti.subject_to(X[k - 1][-1, :] == X[k][0, :])
-            opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
-            opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
+        # if k != 0:
+        #     opti.subject_to(X[k - 1][-1, :] == X[k][0, :])
+        #     opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
+        #     opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
 
         # Collocation constraints
-        theta = Q[k][1 : N[k] + 1, 0]
-        mu = Q[k][1 : N[k] + 1, 1]
+        theta = Q[k][1 : -1, 0]
+        mu = Q[k][1 : -1, 1]
 
-        opti.subject_to(dX[k][1 : N[k] + 1, 0] == cos(theta) * cos(mu))
-        opti.subject_to(dX[k][1 : N[k] + 1, 1] == sin(theta) * cos(mu))
-        opti.subject_to(dX[k][1 : N[k] + 1, 2] == -sin(mu))
+        opti.subject_to(dX[k][1 : -1, 0] == cos(theta) * cos(mu))
+        opti.subject_to(dX[k][1 : -1, 1] == sin(theta) * cos(mu))
+        opti.subject_to(dX[k][1 : -1, 2] == -sin(mu))
         opti.subject_to(opti.bounded(-pi / 2 + 1e-3, mu, pi / 2 - 1e-3))
 
         # for i in range(1, N[k] + 1):
@@ -234,7 +237,7 @@ def fit_iteration(
 
         #     opti.subject_to([(-pi / 2) < mu, mu < (pi / 2)])
 
-        # Defect constraints (why)
+        # Quadrature enforcement
         defect = X[k][0, :]
 
         for j in range(N[k]):
@@ -300,17 +303,17 @@ def fit_iteration(
         opti.subject_to(X[0][0, i] == x0[i])
 
     # Periodicity
-    opti.subject_to(X[-1][N[-1] + 1, :] == X[0][0, :])
+    opti.subject_to(X[-1][-1, :] == X[0][0, :])
 
-    opti.subject_to(Q[-1][N[-1] + 1, 0] == Q[0][0, 0] + 2 * pi)
-    opti.subject_to(Q[-1][N[-1] + 1, 1:] == Q[0][0, 1:])
-    opti.subject_to(dQ[-1][N[-1] + 1, :] == dQ[0][0, :])
+    opti.subject_to(Q[-1][-1, 0] == Q[0][0, 0] + 2 * pi)
+    opti.subject_to(Q[-1][-1, 1:] == Q[0][0, 1:])
+    opti.subject_to(dQ[-1][-1, :] == dQ[0][0, :])
 
 
 
     # Optimize!
 
-    solver_options = {"ipopt.print_level": 5, "print_time": 0, "ipopt.sb": "no", 'ipopt.max_iter': 1000}
+    solver_options = {"ipopt.print_level": 5, "print_time": 0, "ipopt.sb": "no", 'ipopt.max_iter': 1000, "detect_simple_bounds": True}
 
     opti.minimize(J)
     opti.solver("ipopt", solver_options)
@@ -353,7 +356,7 @@ def plot(plots, X, Q):
     b_l = np.asarray(X + n * n_l)
     b_r = np.asarray(X + n * n_r)
 
-    print(b_l, b_r)
+    # print(b_l, b_r)
 
 
     plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
@@ -382,6 +385,7 @@ if __name__ == "__main__":
     )
 
     print(Q[0])
+    print(Q[-1])
 
     plots = []
 
