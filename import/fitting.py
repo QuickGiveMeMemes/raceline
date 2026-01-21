@@ -36,7 +36,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         spline_c: BSpline,
         spline_l: BSpline,
         spline_r: BSpline,
-        w_c: float = 1e1,
+        w_c: float = 1e-3,
         w_l: float = 1e-3,
         w_r: float = 1e-3,
     ) -> MX:
@@ -104,7 +104,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         """
         return w_theta * u[0] ** 2 + w_mu * u[1] ** 2 + w_phi * u[2] ** 2
 
-    def r_w(u, w_n_l=1e2, w_n_r=1e2):
+    def r_w(u, w_n_l=1e5, w_n_r=1e5):
         """
         Computes the error term that penalizes track boundary noise
         r_w = w_n_l * dd_n_l^2 + w_n_r * dd_n_r^2
@@ -341,7 +341,7 @@ def fit_iteration(
         "ipopt.print_level": 5,
         "print_time": 0,
         "ipopt.sb": "no",
-        "ipopt.max_iter": 1000,
+        "ipopt.max_iter": 10000,
         "detect_simple_bounds": True,
         'ipopt.mu_strategy': 'adaptive',
         'ipopt.nlp_scaling_method': 'gradient-based',
@@ -419,36 +419,46 @@ if __name__ == "__main__":
     ) = read_gpx_splines("Monza_better.gpx")
 
     X, Q, X_mat, Q_mat = fit_iteration(
-        np.linspace(0, max_dist, 50), np.array([15] * 49), spline_c, spline_l, spline_r
+        np.linspace(0, max_dist, 75), np.array([25] * 74), spline_c, spline_l, spline_r
     )
 
     # print(Q[0])
-
     plots = []
 
-    plot(plots, X, Q)
+    # plot(plots, X, Q)
 
     # plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
 
     plots.append(
-        go.Scatter3d(x=track[0][0], y=track[0][1], z=track[0][2], name="original left")
+        go.Scatter3d(x=track[0][0], y=track[0][1], z=track[0][2], name="original left", mode="markers")
     )
     plots.append(
-        go.Scatter3d(x=track[1][0], y=track[1][1], z=track[1][2], name="original right")
+        go.Scatter3d(x=track[1][0], y=track[1][1], z=track[1][2], name="original right", mode="markers")
     )
     plots.append(
         go.Scatter3d(
-            x=track[2][0], y=track[2][1], z=track[2][2], name="original center"
+            x=track[2][0], y=track[2][1], z=track[2][2], name="original center", mode="markers"
         )
     )
 
-    fig = go.Figure(data=plots)
-    fig.update_layout(scene=dict(aspectmode="data"))
+    fig = go.Figure()
+
+    foo = Track(Q_mat, X_mat, np.linspace(0, max_dist, 75))
+    fine_plot = foo.plot_uniform(2)
+    # print(fine_plot)
+    for i in fine_plot:
+        fig.add_trace(i)
+    for i in plots:
+        fig.add_trace(i)
 
     fig.show()
-
-    foo = Track(Q_mat, X_mat, np.linspace(0, max_dist, 50))
-    print(foo(np.linspace(0, max_dist, 50)))
+    fig.update_layout(scene=dict(aspectmode="data"))
+    fig.show()
+    # gen = foo(np.linspace(0, max_dist, 50))
+    # print(gen.shape)
+    # # print(gen)
+    # for i, qx in enumerate(gen):
+    #     print(i, qx)
 
     # position = []
 
