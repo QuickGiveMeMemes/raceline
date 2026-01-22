@@ -1,6 +1,8 @@
 from casadi import *
 import numpy as np
 from scipy.interpolate import splev, BSpline
+from track import Track
+
 
 # Number of elements in configuration and euclidean state
 n_q = 5
@@ -39,7 +41,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         w_c: float = 1e-3,
         w_l: float = 1e-3,
         w_r: float = 1e-3,
-    ) -> MX:
+    ):
         """
         Computes tracking error
         e = w_c ||x - c_spline(t)||^2 + w_l ||b_l - l_spline(t)||^2 + w_r ||b_r - r_spline(t)||^2
@@ -124,7 +126,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
     return e(t, x, q, spline_c, spline_l, spline_r) + r_c(u) + r_w(u)
 
 
-def generate_D(tau) -> np.ndarray:
+def generate_D(tau: np.ndarray) -> np.ndarray:
     """
     Generates differentiation matrix using Barycentric weights
 
@@ -239,8 +241,6 @@ def fit_iteration(
         opti.subject_to(opti.bounded(-pi / 2 + 1e-3, mu, pi / 2 - 1e-3))
 
         # Quadrature enforcement
-        # defect = X[k][0, :]
-
         for j in range(N[k]):
 
             lagrange_term = g(
@@ -254,13 +254,6 @@ def fit_iteration(
             )
 
             J += norm_factor * w[j] * lagrange_term
-
-            # dy_term = horzcat(
-            #     cos(theta[j, 0]) * cos(mu[j, 0]),
-            #     sin(theta[j, 0]) * cos(mu[j, 0]),
-            #     -sin(mu[j, 0])
-            # )
-            # defect += half_time_diff * w[j] * dy_term
 
         # Note: by continuity constraints it is guaranteed X[k + 1][0, :] == X[k][-1, :]
         # opti.subject_to(defect == X[k][-1, :])
@@ -317,8 +310,8 @@ def fit_iteration(
                 diff = seg[i] - last
             last = seg[i]
         opti.set_initial(Q[k][:, 0], seg)
-        print(seg[0])
-    print(theta_arr[-1][-1])
+    #     print(seg[0])
+    # print(theta_arr[-1][-1])
 
     # Initial conditions
     x0 = splev(0, spline_c)
@@ -340,7 +333,7 @@ def fit_iteration(
         "ipopt.print_level": 5,
         "print_time": 0,
         "ipopt.sb": "no",
-        "ipopt.max_iter": 1_000,
+        # "ipopt.max_iter": 1_000,
         "detect_simple_bounds": True,
         "ipopt.mu_strategy": "adaptive",
         "ipopt.nlp_scaling_method": "gradient-based",
@@ -355,9 +348,12 @@ def fit_iteration(
     except:
         sol = opti.debug
 
+    # Collect solution
+    # Matrices
     solution_x = []
     solution_q = []
 
+    # Per interval
     X_sol = []
     Q_sol = []
 
@@ -376,35 +372,92 @@ def fit_iteration(
     return np.asarray(solution_x), np.asarray(solution_q), X_sol, Q_sol
 
 
-def plot(plots, X, Q):
-    import plotly.graph_objects as go
+def mesh_refinement(
+    spline_c: BSpline, spline_l: BSpline, spline_r: BSpline, max_dist: float
+):
 
-    theta = Q[:, 0]
-    mu = Q[:, 1]
-    phi = Q[:, 2]
-    n_l = Q[:, 3]
-    n_r = Q[:, 4]
+    INITIAL_COLLOCATION = 25
+    INITIAL_POINTS = 75
 
-    n = horzcat(
-        cos(theta) * sin(mu) * sin(phi) - sin(theta) * cos(phi),
-        sin(theta) * sin(mu) * sin(phi) + cos(theta) * cos(phi),
-        cos(mu) * sin(phi),
-    )
+    t = np.linspace(0, max_dist, INITIAL_POINTS)  # Mesh points
+    N = np.array(
+        [INITIAL_COLLOCATION] * (INITIAL_POINTS - 1)
+    )  # Collocation points per interval
 
-    b_l = np.asarray(X + n * n_l)
-    b_r = np.asarray(X + n * n_r)
+    X, Q, X_mat, Q_mat = fit_iteration(t, N, spline_c, spline_l, spline_r)
 
-    # print(b_l, b_r)
+    track = Track(Q_mat, X_mat, t)
 
-    plots.append(go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center"))
-    plots.append(go.Scatter3d(x=b_l[:, 0], y=b_l[:, 1], z=b_l[:, 2], name="left"))
-    plots.append(go.Scatter3d(x=b_r[:, 0], y=b_r[:, 1], z=b_r[:, 2], name="right"))
+    for i in range(10):
+        t, N = mesh_refinement_iteration(track, t, N, spline_c, spline_l, spline_r)
+
+
+def mesh_refinement_iteration(
+    track: Track,
+    t: np.ndarray,
+    N: np.ndarray,
+    spline_c: BSpline,
+    spline_l: BSpline,
+    spline_r: BSpline,
+    resolution=0.5,
+    std_threshold=1,
+    divides=3,
+    degree_increase=5,
+    initial_points=5
+):
+
+    interval_starts = track.t[:-1]
+    new_t, new_N = [], []
+
+    for i, start_t in enumerate(interval_starts):
+        end_t = interval_starts[i + 1]
+
+        sample_t = np.linspace(start_t, end_t, (end_t - start_t) // resolution)
+
+        states = track.state(sample_t)
+        der_states = track.der_state(sample_t)
+
+        costs = np.asarray(
+            [
+                g(
+                    sample_t[i],
+                    state[:3],
+                    state[3:6],
+                    der_states[i][3:6],
+                    spline_c,
+                    spline_l,
+                    spline_r,
+                )
+                for j, state in enumerate(states)
+            ]
+        )
+
+        stdev = np.std(costs)
+        total = np.sum(costs)
+
+        if stdev > std_threshold:
+            # Divide
+            cumulative = 0
+            for j, c in enumerate(costs):
+                if cumulative > total / divides:
+                    cumulative = 0
+
+                    new_N.append(initial_points)
+                    new_t.append(interval_starts[j + 1])
+
+        else:
+            # Increase degree
+            new_N.append(new_N + degree_increase)
+            new_t.append(start_t)
+
+    return np.asarray(new_N), np.asarray(new_t)
+
+
 
 
 if __name__ == "__main__":
     from gpx_import import read_gpx_splines
     import plotly.graph_objects as go
-    from track import Track
     import plotly.express as px
 
     s_track = [0, 0, 0]
@@ -422,13 +475,13 @@ if __name__ == "__main__":
         np.linspace(0, max_dist, 75), np.array([25] * 74), spline_c, spline_l, spline_r
     )
 
-    # print(Q[0])
+    # Visualize original data
     plots = []
 
-    # plot(plots, X, Q)
-
     plots.append(
-        go.Scatter3d(x=X[:, 0], y=X[:, 1], z=X[:, 2], name="center", mode="lines")
+        go.Scatter3d(
+            x=X[:, 0], y=X[:, 1], z=X[:, 2], name="original center", mode="lines"
+        )
     )
 
     plots.append(
@@ -453,10 +506,17 @@ if __name__ == "__main__":
     fig = go.Figure()
 
     foo = Track(Q_mat, X_mat, np.linspace(0, max_dist, 75))
-    fine_plot = foo.plot_uniform(2)
-    # print(fine_plot)
+    foo.save("monza.json")
+
+    fine_plot, q_fine = foo.plot_uniform(1)
+    collocation_plot, q_collocation = foo.plot_collocation()
+
     for i in fine_plot:
         fig.add_trace(i)
+
+    for i in collocation_plot:
+        fig.add_trace(i)
+
     for i in plots:
         fig.add_trace(i)
 
@@ -464,17 +524,8 @@ if __name__ == "__main__":
     fig.update_layout(scene=dict(aspectmode="data"))
     fig.show()
 
-    q_plot = []
-    q_plot.append(
-        go.Scatter3d(
-            x=Q[:, 0], y=Q[:, 1], z=Q[:, 2], name="theta, mu, phi", mode="lines"
-        )
-    )
-    q_fig = go.Figure(data=q_plot)
+    # Plot theta, mu, phi
+    q_fig = go.Figure(data=[q_collocation, q_fine])
     q_fig.show()
 
-    px.scatter(x=Q[:, 4], y=Q[:, 4]).show()
-
-    # position = []
-
-    # for theta, mu, phi, _, _ in Q:
+    # px.scatter(x=Q[:, 4], y=Q[:, 5]).show()
