@@ -343,12 +343,15 @@ def fit_iteration(
     }
     opti.minimize(J)
     opti.solver("ipopt", solver_options)
+    print(f"Solving with {opti.nx} variables.")
     try:
         sol = opti.solve()
-        print("IPOPT solve iteration succeeded!")
+        stats = sol.stats()
+        print(f"IPOPT solve iteration succeeded in {stats['iter_count']} iterations")
     except:
         sol = opti.debug
-        print("IPOPT solve iteration failed...")
+        stats = sol.stats()
+        print(f"IPOPT solve iteration failed after {stats['iter_count']} iteration...")
 
     print(f"Final cost: {sol.value(J)}")
     # Process solution
@@ -472,7 +475,7 @@ def mesh_refinement_iteration(
             ]
         )
 
-        geo_mean_cost += np.log(costs.mean())
+        geo_mean_cost += np.log(costs.max())
 
         interval_costs.append(costs)
 
@@ -486,8 +489,9 @@ def mesh_refinement_iteration(
 
         stdev = costs.std()
         mean = costs.mean()
+        max_cost = costs.max()
 
-        if mean < (geo_mean_cost + stdev * 0.8):
+        if max_cost < (geo_mean_cost + stdev * 0.1):
             new_N.append(N[i])
             new_t.append(end_t)
             skip_counter += 1
@@ -520,7 +524,6 @@ def mesh_refinement_iteration(
             new_t.append(end_t)
 
     print(f"Degree increased: {deg_counter}\tDivided: {div_counter}\tSkipped: {skip_counter}")
-    print(np.asarray(new_N).shape, np.asarray(new_t).shape)
     assert len(new_N) + 1 == len(new_t)
     return np.asarray(new_N), np.asarray(new_t)
 
