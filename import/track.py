@@ -97,8 +97,19 @@ class Track:
         )
 
     def plot_collocation(self):
+        """
+        Makes Plotly GraphObjects for centerline, left/right boundaries of track, and
+        theta, mu, and phi at the collocation points
+
+        Returns:
+            tuple: Tuple of list of GraphObjects for centerline + left/right boundaries
+                   and GraphObject for theta/mu/phi
+        """        
+
+        # Make a real array, not some dumb list
         X_matrix = np.concatenate(self.X)
 
+        # Calculate track boundaries
         state = np.column_stack([X_matrix, np.concatenate(self.Q)])
         b_l, b_r = self._find_boundaries(state)
 
@@ -134,7 +145,20 @@ class Track:
             line=dict(color=np.arange(len(X_matrix)), colorscale="plasma"),
         )
 
-    def plot_uniform(self, approx_spacing):
+    def plot_uniform(self, approx_spacing: float):
+        """
+        Makes Plotly GraphObjects for centerline, left/right boundaries of track, and
+        theta, mu, and phi at uniformly sampled points along the track
+
+        Args:
+            approx_spacing (float): Distance between sampled points
+
+        Returns:
+            tuple: Tuple of list of GraphObjects for centerline + left/right boundaries
+                   and GraphObject for theta/mu/phi
+        """        
+
+        # Sample uniformly according to the given spacing
         s = np.linspace(0, self.length, int(self.length // approx_spacing))
         points = self(s)
         _, _, _, theta, mu, phi, _, _ = self.state(s).T

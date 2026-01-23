@@ -20,7 +20,7 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
     Args:
         t (float): Arc length parameter
         x (CasADi Expression | np.ndarray): Vector containing [x, y, z]
-        q (CasADi Expression | np.ndarray): Vector containing [θ, μ, Φ, n_l, n_r]
+        q (CasADi Expression | np.ndarray): Vector containing [θ, μ, ɸɸ, n_1, n_r]
         u (CasADi Expression | np.ndarray): The control vector of second derivatives. u = ddq
         spline_c (BSpline): Scipy BSpline for center line
         spline_l (BSpline): Scipy BSpline for left boundary
@@ -106,15 +106,15 @@ def g(t: float, x, q, u, spline_c: BSpline, spline_l: BSpline, spline_r: BSpline
         """
         return w_theta * u[0] ** 2 + w_mu * u[1] ** 2 + w_phi * u[2] ** 2
 
-    def r_w(u, w_n_l=1e5, w_n_r=1e5):
+    def r_w(u, w_n_l: float = 1e5, w_n_r: float = 1e5):
         """
         Computes the error term that penalizes track boundary noise
         r_w = w_n_l * dd_n_l^2 + w_n_r * dd_n_r^2
 
         Args:
             u (CasADi Expression | np.ndarray): The control vector of second derivatives. u = ddq
-            w_n_l (_type_, optional): Defaults to 1e2.
-            w_n_r (_type_, optional): Defaults to 1e2.
+            w_n_l (float, optional): Defaults to 1e2.
+            w_n_r (float, optional): Defaults to 1e2.
 
         Returns:
             CasADi Expression | np.ndarray: r_w
@@ -268,9 +268,7 @@ def fit_iteration(
         tangent = tangent / np.linalg.norm(tangent, axis=1)[:, np.newaxis]
 
         # normal estimate = (spline_l - spline_c) / ||n||
-        normal = (
-            np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))
-        ).T
+        normal = (np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))).T
         normal = normal / np.linalg.norm(normal, axis=1)[:, np.newaxis]
 
         # Calculates Euclidean angles
@@ -334,6 +332,7 @@ def fit_iteration(
         "ipopt.sb": "no",
         "ipopt.max_iter": 1000,
         "detect_simple_bounds": True,
+        "ipopt.linear_solver": "ma97",
         "ipopt.mu_strategy": "adaptive",
         "ipopt.nlp_scaling_method": "gradient-based",
         "ipopt.bound_relax_factor": 1e-8,
@@ -391,13 +390,11 @@ def fit_track(
     Returns:
         Track: _description_
     """
-    INITIAL_COLLOCATION = 5
-    INITIAL_POINTS = 10
+    INITIAL_COLLOCATION = 15
+    INITIAL_POINTS = 50
 
     t = np.linspace(0, max_dist, INITIAL_POINTS)  # Mesh points
-    N = np.array(
-        [INITIAL_COLLOCATION] * (INITIAL_POINTS - 1)
-    )  # Collocation points per interval
+    N = np.array([INITIAL_COLLOCATION] * (INITIAL_POINTS - 1))  # Collocation points per interval
 
     # Initial track
     X, Q, X_mat, Q_mat = fit_iteration(t, N, spline_c, spline_l, spline_r)
@@ -421,10 +418,10 @@ def mesh_refinement_iteration(
     spline_l: BSpline,
     spline_r: BSpline,
     resolution=0.5,
-    variation_thres=0.7,
+    variation_thres=0.6,
     divides=3,
-    degree_increase=5,
-    initial_points=10,
+    degree_increase=10,
+    initial_points=15,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Performs a single iteration of mesh refinement
@@ -453,6 +450,7 @@ def mesh_refinement_iteration(
     interval_starts = track.t[:-1]
     new_t, new_N = [t.min()], []
     interval_costs = []
+    samples = []
     geo_mean_cost = 0
 
     deg = 0
@@ -464,9 +462,8 @@ def mesh_refinement_iteration(
 
         # Sample t, remove first so it cannot be added multiple times
         # assert end_t != start_t
-        sample_t = np.linspace(
-            start_t, end_t, math.ceil((end_t - start_t) / resolution)
-        )[1:]
+        sample_t = np.linspace(start_t, end_t, math.ceil((end_t - start_t) / resolution))[1:]
+        samples.append(sample_t)
 
         # Sample state at each t as well as its derivative
         states = track.state(sample_t)
@@ -496,18 +493,16 @@ def mesh_refinement_iteration(
 
     for i, start_t in enumerate(interval_starts):
         end_t = track.t[i + 1]
-        sample_t = np.linspace(
-            start_t, end_t, math.ceil((end_t - start_t) / resolution)
-        )[1:]
+        sample_t = samples[i]
 
         costs = interval_costs[i]
-        
+
         stdev = costs.std()
         mean = costs.mean()
 
         print(mean, geo_mean_cost)
 
-        if mean < geo_mean_cost:
+        if mean < (geo_mean_cost + stdev * 0.8):
             new_N.append(N[i])
             new_t.append(end_t)
             print("interval is good")
@@ -522,14 +517,13 @@ def mesh_refinement_iteration(
             div += 1
             cumulative = 0
 
-
             for j, c in enumerate(costs):
-                cumulative += c
                 if cumulative > total / divides:
                     cumulative = 0
 
                     new_N.append(initial_points)
                     new_t.append(sample_t[j])
+                cumulative += c
 
             if abs(end_t - new_t[-1]) > 1e-7:
                 new_N.append(initial_points)
