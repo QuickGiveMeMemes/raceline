@@ -376,7 +376,7 @@ def fit_track(
     spline_l: BSpline,
     spline_r: BSpline,
     max_dist: float,
-    refinement_steps: int = 2,
+    refinement_steps: int = 3,
 ) -> Track:
     """
     Fits a Track object
@@ -392,7 +392,7 @@ def fit_track(
         Track: _description_
     """
     INITIAL_COLLOCATION = 5
-    INITIAL_POINTS = 50
+    INITIAL_POINTS = 10
 
     t = np.linspace(0, max_dist, INITIAL_POINTS)  # Mesh points
     N = np.array(
@@ -421,10 +421,10 @@ def mesh_refinement_iteration(
     spline_l: BSpline,
     spline_r: BSpline,
     resolution=0.5,
-    variation_thres=0.4,
-    divides=5,
+    variation_thres=0.7,
+    divides=3,
     degree_increase=5,
-    initial_points=5,
+    initial_points=10,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Performs a single iteration of mesh refinement
@@ -452,22 +452,25 @@ def mesh_refinement_iteration(
     # Start t of each interval
     interval_starts = track.t[:-1]
     new_t, new_N = [t.min()], []
+    interval_costs = []
+    geo_mean_cost = 0
 
     deg = 0
     div = 0
+    skip = 0
 
     for i, start_t in enumerate(interval_starts):
         end_t = track.t[i + 1]
 
-        # Sample t, remove first and last so they cannot be added multiple times
-        assert end_t != start_t
+        # Sample t, remove first so it cannot be added multiple times
+        # assert end_t != start_t
         sample_t = np.linspace(
             start_t, end_t, math.ceil((end_t - start_t) / resolution)
         )[1:]
 
         # Sample state at each t as well as its derivative
         states = track.state(sample_t)
-        der_states = track.der_state(sample_t)
+        control = track.der_state(sample_t, der=2)
 
         # Compute costs across interval i at the end of each t
         costs = np.asarray(
@@ -476,7 +479,7 @@ def mesh_refinement_iteration(
                     sample_t[j],
                     state[:3],
                     state[3:],
-                    der_states[j][3:],
+                    control[j][3:],
                     spline_c,
                     spline_l,
                     spline_r,
@@ -485,8 +488,32 @@ def mesh_refinement_iteration(
             ]
         )
 
-        stdev = np.std(costs)
-        mean = np.mean(costs)
+        geo_mean_cost += np.log(costs.mean())
+
+        interval_costs.append(costs)
+
+    geo_mean_cost = np.exp(geo_mean_cost / len(interval_costs))
+
+    for i, start_t in enumerate(interval_starts):
+        end_t = track.t[i + 1]
+        sample_t = np.linspace(
+            start_t, end_t, math.ceil((end_t - start_t) / resolution)
+        )[1:]
+
+        costs = interval_costs[i]
+        
+        stdev = costs.std()
+        mean = costs.mean()
+
+        print(mean, geo_mean_cost)
+
+        if mean < geo_mean_cost:
+            new_N.append(N[i])
+            new_t.append(end_t)
+            print("interval is good")
+            skip += 1
+            continue
+
         print("variation", stdev / mean)
         total = np.sum(costs)
 
@@ -515,7 +542,7 @@ def mesh_refinement_iteration(
 
             new_t.append(end_t)
 
-    print(f"Degree increased: {deg}\tDivided: {div}")
+    print(f"Degree increased: {deg}\tDivided: {div}\tSkipped: {skip}")
     print(np.asarray(new_N).shape, np.asarray(new_t).shape)
     assert len(new_N) + 1 == len(new_t)
     return np.asarray(new_N), np.asarray(new_t)
