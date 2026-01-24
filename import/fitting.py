@@ -585,7 +585,7 @@ if __name__ == "__main__":
     foo = fit_track(spline_c, spline_l, spline_r, max_dist)
 
     # foo = Track(Q_mat, X_mat, np.linspace(0, max_dist, 75))
-    foo.save("monza.json")
+    foo.save("./generated/monza.json")
 
     fine_plot, q_fine = foo.plot_uniform(1)
     collocation_plot, q_collocation = foo.plot_collocation()
