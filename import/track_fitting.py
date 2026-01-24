@@ -1,3 +1,6 @@
+import os, sys
+sys.path.append(os.path.join(os.path.dirname(__file__)))
+
 import math
 import numpy as np
 from casadi import *
