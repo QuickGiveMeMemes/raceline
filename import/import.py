@@ -1,5 +1,6 @@
 import os, sys
-sys.path.append(os.path.join(os.path.dirname(__file__)))
+
+sys.path.append(os.path.dirname(__file__))
 
 import argparse
 import yaml
@@ -14,7 +15,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--gpx_source", required=True, type=str, help="Source path to track gpx file.")
+    parser.add_argument(
+        "--gpx_source", required=True, type=str, help="Source path to track gpx file."
+    )
     parser.add_argument(
         "--track_destination",
         default="track.json",
@@ -25,26 +28,30 @@ if __name__ == "__main__":
         "--config", default="config/default.yaml", type=str, help="Path to config file."
     )
     parser.add_argument("--plot", default=False, action="store_true", help="Toggles on plotting.")
-
+    parser.add_argument(
+        "--solver", default="mumps", type=str, help="Solver to use (mumps, ma57, ma86, ma97, etc.)."
+    )
 
     args = parser.parse_args()
-
 
     with open(args.config, "r") as file:
         config_data = yaml.safe_load(file)
 
+    config_data["track_fitting"]["ipopt"]["ipopt.linear_solver"] = args.solver
 
-    original_track, (
-        max_dist,
-        spline_l,
-        spline_r,
-        spline_c,
-        _,
-        _,
-        _,
-    ), ccw = read_gpx_splines(args.gpx_source)
-
-
+    (
+        original_track,
+        (
+            max_dist,
+            spline_l,
+            spline_r,
+            spline_c,
+            _,
+            _,
+            _,
+        ),
+        ccw,
+    ) = read_gpx_splines(args.gpx_source)
 
     track = fit_track(spline_c, spline_l, spline_r, max_dist, config_data["track_fitting"], ccw)
     track.save(args.track_destination)

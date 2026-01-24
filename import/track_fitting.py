@@ -1,5 +1,6 @@
 import os, sys
-sys.path.append(os.path.join(os.path.dirname(__file__)))
+
+sys.path.append(os.path.dirname(__file__))
 
 import math
 import numpy as np
@@ -63,14 +64,13 @@ def fit_iteration(
         spline_c (BSpline): _description_
         spline_l (BSpline): _description_
         spline_r (BSpline): _description_
-        cost_fn (PathCost): _description_
+        cost_fn (PathCost): Cost object
         ipopt_settings (dict): Ipopt settings as defined in default.yaml.
         track (Track, optional): _description_. Defaults to None.
         max_iter (int, optional): _description_. Defaults to 1e3.
 
     Returns:
         Track: Fitted Track object from this iteration.
-        float: Final cost achieved.
     """
 
     print("Running iteration of collocation fitting...")
@@ -147,10 +147,7 @@ def fit_iteration(
                 t_tau[j + 1],
                 X[k][j + 1, :],
                 Q[k][j + 1, :],
-                ddQ[k][j + 1, :],
-                spline_c,
-                spline_l,
-                spline_r,
+                ddQ[k][j + 1, :]
             )
 
             J += norm_factor * w[j] * lagrange_term
@@ -247,7 +244,7 @@ def fit_iteration(
     # Process solution
     X_sol = [sol.value(seg) for seg in X]
     Q_sol = [sol.value(seg) for seg in Q]
-    return Track(Q_sol, X_sol, t), sol.value(J)
+    return Track(Q_sol, X_sol, t)
 
 
 def fit_track(
@@ -256,7 +253,7 @@ def fit_track(
     spline_r: BSpline,
     max_dist: float,
     settings: dict,
-    ccw: bool
+    ccw: bool,
 ) -> Track:
     """
     Fits a Track object
@@ -272,7 +269,7 @@ def fit_track(
     Returns:
         Track: _description_
     """
-    cost_fn = PathCost(settings["cost_weights"])
+    cost_fn = PathCost(settings["cost_weights"], spline_c, spline_l, spline_r)
 
     initial_collocation = settings["refinement"]["initial_collocation"]
     initial_mesh_points = settings["refinement"]["initial_mesh_points"]
@@ -284,10 +281,17 @@ def fit_track(
     )  # Collocation points per interval
 
     # Initial track
-    track, best_cost = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+    track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+
+    sample_t = np.linspace(
+        0, max_dist, math.ceil(max_dist / settings["refinement"]["config"]["sampling_resolution"])
+    )
+
 
     best_eval = track
     best_iter = 0
+    best_cost, _ = cost_fn.sample_tracking_cost(track, sample_t)
+    print(f"Sampled error: {best_cost:e}")
 
     # Refinement
     for i in range(refinement_steps):
@@ -298,7 +302,10 @@ def fit_track(
         print(
             f"Fitting with {len(N)} segments with a segment maximum of {max(N)} collocation points and total sum of {N.sum()} collocation points"
         )
-        track, new_cost = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+        track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+        new_cost, _ = cost_fn.sample_tracking_cost(track, sample_t)
+
+        print(f"Sampled error: {new_cost:e}")
 
         if new_cost < best_cost:
             best_eval = track
@@ -306,6 +313,7 @@ def fit_track(
             best_cost = new_cost
 
     track.ccw = ccw
+
     print(f"Fitting finished. Chose iteration {best_iter} with cost evaluation {best_cost}.")
     return best_eval
 
@@ -361,25 +369,8 @@ def mesh_refinement_iteration(
         sample_t = np.linspace(start_t, end_t, math.ceil((end_t - start_t) / resolution))[1:]
         samples.append(sample_t)
 
-        # Sample state at each t as well as its derivative
-        states = track.state(sample_t)
-        control = track.der_state(sample_t, n=2)
-
         # Compute costs across interval i at the end of each t
-        costs = np.asarray(
-            [
-                cost_fn(
-                    sample_t[j],
-                    state[:3],
-                    state[3:],
-                    control[j][3:],
-                    spline_c,
-                    spline_l,
-                    spline_r,
-                )
-                for j, state in enumerate(states)
-            ]
-        )
+        _, costs = cost_fn.sample_tracking_cost(track, sample_t)
 
         geo_mean_cost += np.log(costs.max())
 
@@ -484,10 +475,6 @@ if __name__ == "__main__":
     )
 
     fig = go.Figure()
-
-    # X, Q, X_mat, Q_mat = fit_iteration(
-    #     np.linspace(0, max_dist, 75), np.array([25] * 74), spline_c, spline_l, spline_r
-    # )
 
     foo = fit_track(spline_c, spline_l, spline_r, max_dist)
 

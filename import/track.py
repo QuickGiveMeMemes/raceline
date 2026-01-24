@@ -61,7 +61,7 @@ class Track:
             np.ndarray: Array containing states [x, y, z, theta, mu, phi, n_l, n_r]
                         for each given arc length parameter
         """
-        s %= self.length
+        s = s % self.length
         k = np.searchsorted(self.t[1:], s)
 
         tau, k = self.t_to_tau(s)
@@ -78,7 +78,7 @@ class Track:
             np.ndarray: Array containing the nth derivative of states
                         [x, y, z, theta, mu, phi, n_l, n_r] for each given arc length parameter
         """
-        s %= self.length
+        s = s % self.length
         k = np.searchsorted(self.t[1:], s)
 
         tau, k = self.t_to_tau(s)
