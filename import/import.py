@@ -39,33 +39,11 @@ if __name__ == "__main__":
         _,
         _,
         _,
-    ) = read_gpx_splines(args.gpx_source)
+    ), ccw = read_gpx_splines(args.gpx_source)
 
-    # Checking Clockwise or Counterclockwise via Greene's Theorem
-    sample_space = np.linspace(0, max_dist, 1_000)
-    sample = splev(sample_space, spline_c)
-    area = sum(
-        np.array([sample[0][i] * sample[1][i + 1] - sample[0][i + 1] * sample[1][i]])
-        for i in range(999)
-    )  # Hacky "trapezoidal" approximation
 
-    ccw = False
 
-    # Is counterclockwise, reverse parameterization
-    if area > 0:
-        print("Re-parameterizing for CCW track...")
-        ccw = True
-        fine_sample = np.linspace(max_dist, 0, int(max_dist // RESOLUTION))
-        sample_c = splev(fine_sample, spline_c)
-        sample_l = splev(fine_sample, spline_l)
-        sample_r = splev(fine_sample, spline_r)
-
-        fine_sample = fine_sample[::-1]  # Reverse parameterization
-        spline_c, _ = splprep(sample_c, u=fine_sample)
-        spline_l, _ = splprep(sample_l, u=fine_sample)
-        spline_r, _ = splprep(sample_r, u=fine_sample)
-
-    track = fit_track(spline_c, spline_l, spline_r, max_dist, config_data["track_fitting"], ccw=ccw)
+    track = fit_track(spline_c, spline_l, spline_r, max_dist, config_data["track_fitting"], ccw)
     track.save(args.track_destination)
 
     if args.plot:

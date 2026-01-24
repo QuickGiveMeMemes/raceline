@@ -6,7 +6,6 @@ import gpxpy.gpx
 from pyproj import Transformer
 from scipy.interpolate import splev, splprep, BSpline
 from scipy.spatial import KDTree
-from casadi import *
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -129,7 +128,7 @@ def read_gpx_splines(source):
 
     trm = Transformer.from_crs("EPSG:4326", "EPSG:26917", always_xy=True)
 
-    # 0 - Outside/Left, 1 - Inside/Right, 2 - Center
+    # 0 - Outside, 1 - Inside, 2 - Center
     # x, y, z:
     #   1st dim - outside/inside
     #   2nd dim - [[x], [y], [z]]
@@ -193,8 +192,24 @@ def read_gpx_splines(source):
     # Set origin to be first center point
     for i, t in enumerate(track):
         track[i] = (t.T - track[2][:, 0]).T
+    
 
-    return track, parameterized_interpolation(track)
+    area = sum(
+        np.array([track[2][0][i] * track[2][1][i + 1] - track[2][0][i + 1] * track[2][1][i]])
+        for i in range(len(track[2]) - 1)
+    )  # Hacky "trapezoidal" approximation
+    
+    # Initially, track was [outside, inside, center]. Now, for math to work, we rearrange into
+    # Left, right, center for the binormal vector to point the correct way.
+    ccw = area > 0
+    if ccw: 
+        print("Track is counter clockwise, flipping")
+        track[0], track[1] = track[1], track[0]
+    else:
+        print("Track is clockwise")
+    # From this point onwards, track contains [left, right, center].
+
+    return track, parameterized_interpolation(track), ccw
 
 
 if __name__ == "__main__":

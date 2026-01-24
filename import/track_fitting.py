@@ -47,6 +47,7 @@ def fit_iteration(
     spline_r: BSpline,
     cost_fn: PathCost,
     ipopt_settings: dict,
+    ccw: bool,
     track: Track = None,
     max_iter: int = 1e3,
 ):
@@ -212,7 +213,7 @@ def fit_iteration(
     # Periodicity
     opti.subject_to(X[-1][-1, :] == X[0][0, :])
 
-    opti.subject_to(Q[-1][-1, 0] == Q[0][0, 0] - 2 * pi)
+    opti.subject_to(Q[-1][-1, 0] == Q[0][0, 0] + 2 * pi * (1 if ccw else -1))
     opti.subject_to(Q[-1][-1, 1:] == Q[0][0, 1:])
 
     # Optimize!
@@ -251,7 +252,7 @@ def fit_track(
     spline_r: BSpline,
     max_dist: float,
     settings: dict,
-    ccw: bool = False,
+    ccw: bool
 ) -> Track:
     """
     Fits a Track object
@@ -279,7 +280,7 @@ def fit_track(
     )  # Collocation points per interval
 
     # Initial track
-    track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"])
+    track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
 
     # Refinement
     for i in range(refinement_steps):
@@ -290,7 +291,7 @@ def fit_track(
         print(
             f"Fitting with {len(N)} segments with a segment maximum of {max(N)} collocation points and total sum of {N.sum()} collocation points"
         )
-        track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"])
+        track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
 
     track.ccw = ccw
     return track
