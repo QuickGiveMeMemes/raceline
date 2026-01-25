@@ -64,9 +64,9 @@ class PathCost:
 
         return self.e(t, x, q) + self.r_c(u) + self.r_w(u)
 
-    def sample_tracking_cost(self, track: Track, sample_t: np.ndarray) -> float:
+    def sample_cost(self, track: Track, sample_t: np.ndarray) -> float:
         """
-        Calculates tracking error at various given points.
+        Calculates error at various given points.
 
         Args:
             track (Track): Track object
@@ -83,7 +83,7 @@ class PathCost:
         # Compute costs across all given t
         costs = np.fromiter(
             (
-                self.e(sample_t[j], state[:3], state[3:])
+                self(sample_t[j], state[:3], state[3:], control[j])
                 for j, state in enumerate(states)
             ),
             dtype=np.float64,

@@ -143,12 +143,7 @@ def fit_iteration(
         # Quadrature enforcement
         for j in range(N[k]):
 
-            lagrange_term = cost_fn(
-                t_tau[j + 1],
-                X[k][j + 1, :],
-                Q[k][j + 1, :],
-                ddQ[k][j + 1, :]
-            )
+            lagrange_term = cost_fn(t_tau[j + 1], X[k][j + 1, :], Q[k][j + 1, :], ddQ[k][j + 1, :])
 
             J += norm_factor * w[j] * lagrange_term
 
@@ -219,6 +214,15 @@ def fit_iteration(
 
     # Optimize!
     opti.minimize(J)
+    # opti.solver(
+    #     "fatrop",
+    #     {
+    #         "print_time": False,
+    #         "fatrop.max_iter": 1000,
+    #     }
+        
+    # )
+
     try:
         opti.solver("ipopt", ipopt_settings)
     except Exception as e:
@@ -234,16 +238,17 @@ def fit_iteration(
     try:
         sol = opti.solve()
         stats = sol.stats()
-        print(f"IPOPT solve iteration succeeded in {stats['iter_count']} iterations")
+        print(f"Solve iteration succeeded in {stats['iter_count']} iterations")
     except:
         sol = opti.debug
         stats = sol.stats()
-        print(f"IPOPT solve iteration failed after {stats['iter_count']} iteration...")
+        print(f"Solve iteration failed after {stats['iter_count']} iteration...")
 
     print(f"Final cost: {sol.value(J)}")
     # Process solution
     X_sol = [sol.value(seg) for seg in X]
     Q_sol = [sol.value(seg) for seg in Q]
+
     return Track(Q_sol, X_sol, t)
 
 
@@ -287,10 +292,9 @@ def fit_track(
         0, max_dist, math.ceil(max_dist / settings["refinement"]["config"]["sampling_resolution"])
     )
 
-
     best_eval = track
     best_iter = 0
-    best_cost, _ = cost_fn.sample_tracking_cost(track, sample_t)
+    best_cost, _ = cost_fn.sample_cost(track, sample_t)
     print(f"Sampled error: {best_cost:e}")
 
     # Refinement
@@ -303,7 +307,7 @@ def fit_track(
             f"Fitting with {len(N)} segments with a segment maximum of {max(N)} collocation points and total sum of {N.sum()} collocation points"
         )
         track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
-        new_cost, _ = cost_fn.sample_tracking_cost(track, sample_t)
+        new_cost, _ = cost_fn.sample_cost(track, sample_t)
 
         print(f"Sampled error: {new_cost:e}")
 
@@ -370,7 +374,7 @@ def mesh_refinement_iteration(
         samples.append(sample_t)
 
         # Compute costs across interval i at the end of each t
-        _, costs = cost_fn.sample_tracking_cost(track, sample_t)
+        _, costs = cost_fn.sample_cost(track, sample_t)
 
         geo_mean_cost += np.log(costs.max())
 
