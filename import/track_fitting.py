@@ -6,6 +6,7 @@ import math
 import numpy as np
 from casadi import *
 from scipy.interpolate import splev, BSpline
+from scipy.stats import gmean
 from track import Track
 from path_cost import PathCost
 
@@ -144,7 +145,9 @@ def fit_iteration(
         # Quadrature enforcement
         for j in range(N[k]):
 
-            lagrange_term = cost_fn(t_tau[j + 1], X[k][j + 1, :], Q[k][j + 1, :], ddQ[k][j + 1, :])
+            lagrange_term = cost_fn(
+                t_tau[j + 1], X[k][j + 1, :], Q[k][j + 1, :], ddQ[k][j + 1, :]
+            )
 
             J += norm_factor * w[j] * lagrange_term
 
@@ -158,7 +161,9 @@ def fit_iteration(
             # Creates TNB vectors to find Euler angles
             tangent = np.asarray(splev(t_tau, spline_c, der=1)).T
             tangent = tangent / np.linalg.norm(tangent, axis=1)[:, np.newaxis]
-            normal = (np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))).T
+            normal = (
+                np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))
+            ).T
             normal = normal / np.linalg.norm(normal, axis=1)[:, np.newaxis]
             binormal = np.cross(tangent, normal)
             normal = np.cross(binormal, tangent)  # Recalculates N to remove skew
@@ -183,11 +188,17 @@ def fit_iteration(
 
             # Estimates left-right boundary lengths
             nl_guess = np.linalg.norm(
-                (np.asarray(splev(t_tau, spline_l)) - np.asarray(splev(t_tau, spline_c))).T,
+                (
+                    np.asarray(splev(t_tau, spline_l))
+                    - np.asarray(splev(t_tau, spline_c))
+                ).T,
                 axis=1,
             )
             nr_guess = -np.linalg.norm(
-                (np.asarray(splev(t_tau, spline_r)) - np.asarray(splev(t_tau, spline_c))).T,
+                (
+                    np.asarray(splev(t_tau, spline_r))
+                    - np.asarray(splev(t_tau, spline_c))
+                ).T,
                 axis=1,
             )
 
@@ -222,14 +233,16 @@ def fit_iteration(
     #         "print_time": False,
     #         "fatrop.max_iter": 1000,
     #     }
-        
+
     # )
 
     try:
         opti.solver("ipopt", ipopt_settings)
     except Exception as e:
         if "ipopt.linear_solver" in ipopt_settings:
-            print(f"Could not use solver {ipopt_settings['ipopt.linear_solver']}, using default!")
+            print(
+                f"Could not use solver {ipopt_settings['ipopt.linear_solver']}, using default!"
+            )
             ipopt_settings["ipopt.linear_solver"] = "mumps"
             opti.solver("ipopt", ipopt_settings)
 
@@ -288,10 +301,14 @@ def fit_track(
     )  # Collocation points per interval
 
     # Initial track
-    track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+    track = fit_iteration(
+        t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw
+    )
 
     sample_t = np.linspace(
-        0, max_dist, math.ceil(max_dist / settings["refinement"]["config"]["sampling_resolution"])
+        0,
+        max_dist,
+        math.ceil(max_dist / settings["refinement"]["config"]["sampling_resolution"]),
     )
 
     best_eval = track
@@ -303,12 +320,21 @@ def fit_track(
     for i in range(refinement_steps):
         print(f"Refinement step {i + 1}/{refinement_steps}")
         N, t = mesh_refinement_iteration(
-            track, t, N, spline_c, spline_l, spline_r, cost_fn, settings["refinement"]["config"]
+            track,
+            t,
+            N,
+            spline_c,
+            spline_l,
+            spline_r,
+            cost_fn,
+            settings["refinement"]["config"],
         )
         print(
             f"Fitting with {len(N)} segments with a segment maximum of {max(N)} collocation points and total sum of {N.sum()} collocation points"
         )
-        track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+        track = fit_iteration(
+            t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw
+        )
         new_cost, _ = cost_fn.sample_cost(track, sample_t)
 
         print(f"Sampled error: {new_cost:e}")
@@ -320,7 +346,9 @@ def fit_track(
 
     track.ccw = ccw
 
-    print(f"Fitting finished. Chose iteration {best_iter} with cost evaluation {best_cost}.")
+    print(
+        f"Fitting finished. Chose iteration {best_iter} with cost evaluation {best_cost}."
+    )
     return best_eval
 
 
@@ -372,17 +400,20 @@ def mesh_refinement_iteration(
 
         # Sample t, remove first so it cannot be added multiple times
         # assert end_t != start_t
-        sample_t = np.linspace(start_t, end_t, math.ceil((end_t - start_t) / resolution))[1:]
+        sample_t = np.linspace(
+            start_t, end_t, math.ceil((end_t - start_t) / resolution)
+        )[1:]
         samples.append(sample_t)
 
         # Compute costs across interval i at the end of each t
         _, costs = cost_fn.sample_cost(track, sample_t)
 
-        geo_mean_cost += np.log(costs.mean())
+        geo_mean_cost += np.log(costs).sum()
 
         interval_costs.append(costs)
 
-    geo_mean_cost = np.exp(geo_mean_cost / len(interval_costs))
+    # TODO this is an approximation, check if it is satisfactory
+    geo_mean_cost = np.exp(geo_mean_cost / ((track.t[-1] - track.t[0]) / resolution))
 
     for i, start_t in enumerate(interval_starts):
         end_t = track.t[i + 1]
@@ -391,10 +422,10 @@ def mesh_refinement_iteration(
         costs = interval_costs[i]
 
         stdev = costs.std()
-        mean = costs.mean()
+        mean = gmean(costs)
         max_cost = costs.max()
 
-        if max_cost < (geo_mean_cost + stdev * 0.1):
+        if mean < geo_mean_cost:
             new_N.append(N[i])
             new_t.append(end_t)
             skip_counter += 1
@@ -430,7 +461,9 @@ def mesh_refinement_iteration(
 
             new_t.append(end_t)
 
-    print(f"Degree increased: {deg_counter}\tDivided: {div_counter}\tSkipped: {skip_counter}")
+    print(
+        f"Degree increased: {deg_counter}\tDivided: {div_counter}\tSkipped: {skip_counter}"
+    )
     assert len(new_N) + 1 == len(new_t)
     return np.asarray(new_N), np.asarray(new_t)
 

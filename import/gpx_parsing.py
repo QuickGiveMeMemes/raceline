@@ -71,7 +71,9 @@ def parameterized_interpolation(
     )
 
 
-def interpolate(sample: np.ndarray, spacing: float = 1.0, accurate_param=False) -> np.ndarray:
+def interpolate(
+    sample: np.ndarray, spacing: float = 1.0, accurate_param=False
+) -> np.ndarray:
     """
     Fits polynomial splines to the given sample and returns a new array with
     evenly spaced points sampled from the splines. We approximate the total distance
@@ -142,7 +144,9 @@ def read_gpx_splines(source):
             elif t.name == "Inside":
                 i = 1
             else:
-                raise ValueError(f"{source} must contain only tracks 'Outside' and 'Inside'")
+                raise ValueError(
+                    f"{source} must contain only tracks 'Outside' and 'Inside'"
+                )
 
             for s in t.segments:
                 for p in s.points:
@@ -161,7 +165,9 @@ def read_gpx_splines(source):
             elif t.name == "Inside":
                 i = 1
             else:
-                raise ValueError(f"{source} must contain only tracks 'Outside' and 'Inside'")
+                raise ValueError(
+                    f"{source} must contain only tracks 'Outside' and 'Inside'"
+                )
 
             for p in t.points:
                 x, y = trm.transform(p.longitude, p.latitude)
@@ -192,47 +198,48 @@ def read_gpx_splines(source):
     # Set origin to be first center point
     for i, t in enumerate(track):
         track[i] = (t.T - track[2][:, 0]).T
-    
 
-    area = sum(
-        np.array([track[2][0][i] * track[2][1][i + 1] - track[2][0][i + 1] * track[2][1][i]])
-        for i in range(len(track[2]) - 1)
-    )  # Hacky "trapezoidal" approximation
-    
-    # Initially, track was [outside, inside, center]. Now, for math to work, we rearrange into
-    # Left, right, center for the binormal vector to point the correct way.
-    ccw = area > 0
-    if ccw: 
+    # Check if outside is to left (clockwise)
+    tangent = track[2][:2, 1] - track[2][:2, 0]
+    left_side = np.array([-tangent[1], tangent[0]])
+    ccw = np.dot((track[0][:2, 0] - track[2][:2, 0]), left_side) < 0
+
+    if ccw:
         print("Track is counter clockwise, flipping")
         track[0], track[1] = track[1], track[0]
     else:
         print("Track is clockwise")
+
     # From this point onwards, track contains [left, right, center].
 
     return track, parameterized_interpolation(track), ccw
 
 
 if __name__ == "__main__":
-    FILE = "Zandvoort.gpx"
+    FILE = "gpx/COTA.gpx"
     s_track = [0, 0, 0]
-    track, (
-        max_dist,
-        spline_l,
-        spline_r,
-        spline_c,
-        s_track[0],
-        s_track[1],
-        s_track[2],
+    (
+        track,
+        (
+            max_dist,
+            spline_l,
+            spline_r,
+            spline_c,
+            s_track[0],
+            s_track[1],
+            s_track[2],
+        ),
+        ccw,
     ) = read_gpx_splines(FILE)
 
     plots = []
 
-    for t in track:
-        plots.append(go.Scatter3d(x=t[0], y=t[1], z=t[2], name="original"))
+    for i, t in enumerate(track):
+        plots.append(go.Scatter3d(x=t[0], y=t[1], z=t[2], name=f"original{i}"))
 
-    for s in (spline_l, spline_r, spline_c):
-        x, y, z = splev(np.linspace(0, max_dist, int(max_dist // 5)), s)
-        plots.append(go.Scatter3d(x=x, y=y, z=z, name="param splines"))
+    # for s in (spline_l, spline_r, spline_c):
+    #     x, y, z = splev(np.linspace(0, max_dist, int(max_dist // 5)), s)
+    #     plots.append(go.Scatter3d(x=x, y=y, z=z, name="param splines"))
 
     plots.append(go.Scatter3d(x=[0], y=[0], z=[0], name="origin"))
 

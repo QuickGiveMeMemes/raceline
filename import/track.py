@@ -138,7 +138,7 @@ class Track:
             line=dict(color=np.arange(len(X_matrix)), colorscale="plasma"),
         )
 
-    def plot_uniform(self, approx_spacing: float = 2):
+    def plot_uniform(self, approx_spacing: float = 0.1):
         """
         Makes Plotly GraphObjects for centerline, left/right boundaries of track, and
         theta, mu, and phi at uniformly sampled points along the track

@@ -25,7 +25,7 @@ track_fitting:
     w_r: 1.0e-2
 
     # Euler Angle Curvature weights
-    w_theta: 0.5e+1
+    w_theta: 5.0e+2
     w_mu: 1.0e+7
     w_phi: 1.0e+7
 
@@ -43,6 +43,6 @@ track_fitting:
     # Lower level parameters relating to the mesh refinement process
     config:
       sampling_resolution: 0.5 # Cost function sampling resolution
-      variation_threshold: 0.45 # Threshold of variation to choose between h and p refinement
-      h_divisions: 4 # Number of mesh points added when h-refining a segment
-      p_degree_increase: 2 # Degree added when p-refining a segment
+      variation_threshold: 0.5 # Threshold of variation to choose between h and p refinement
+      h_divisions: 2 # Number of mesh points added when h-refining a segment
+      p_degree_increase: 5 # Degree added when p-refining a segment

@@ -36,9 +36,9 @@ track_fitting:
   # Mesh refinement options
   refinement:
     # Basic refinement configs
-    initial_collocation: 5 # Number of collocation points per segment initially
-    initial_mesh_points: 10 # Number of mesh points initially
-    refinement_steps: 10 # Number of refinement steps to perform
+    initial_collocation: 9 # Number of collocation points per segment initially
+    initial_mesh_points: 15 # Number of mesh points initially
+    refinement_steps: 8 # Number of refinement steps to perform
 
     # Lower level parameters relating to the mesh refinement process
     config:
