@@ -1,4 +1,4 @@
-# casadi
+casadi
 numpy
 matplotlib 
 gpxpy
@@ -8,3 +8,4 @@ scipy
 plotly
 pdoc
 Pandas
+pin

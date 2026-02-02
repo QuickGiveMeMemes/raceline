@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<robot name="vehicle">
+
+    <!-- Links/frames follow the paper notation-->
+    <link name="b1"></link>
+    <link name="b2"></link>
+    <link name="b3">
+        <inertial>
+            <mass value="1.0"/>
+            <inertia ixx="0.01" ixy="0.0" ixz="0.0"
+                    iyy="0.01" iyz="0.0" izz="0.01"/>
+        </inertial>
+    </link>
+    <link name="b4"></link>
+    <link name="b5"></link>
+    <link name="b6">
+        <inertial>
+            <mass value="1.0"/>
+            <inertia ixx="0.01" ixy="0.0" ixz="0.0"
+                    iyy="0.01" iyz="0.0" izz="0.01"/>
+        </inertial>
+    </link>
+
+    <!-- Lateral prismatic joint on the ribbon road-->
+    <joint name="road_lat" type="prismatic">
+        <parent link="b1" />
+        <child link="b2" />
+        <axis xyz="0 1 0" />
+        <limit lower="-100" upper="100" effort="10000" velocity="299792458" />
+    </joint>
+
+    <!-- Yaw of the car along the track frame-->
+    <joint name="yaw" type="revolute">
+        <parent link="b2" />
+        <child link="b3" />
+        <axis xyz="0 0 1" />
+        <limit lower="-100" upper="100" effort="10000" velocity="299792458" />
+    </joint>
+
+    <!-- Vertical travel of the suspension on the track-->
+    <joint name="vert" type="prismatic">
+        <parent link="b3" />
+        <child link="b4" />
+        <axis xyz="0 0 1" />
+        <limit lower="-100" upper="100" effort="10000" velocity="299792458" />
+    </joint>
+
+    <!-- Dive/squat of the suspension-->
+    <joint name="pitch" type="revolute">
+        <parent link="b4" />
+        <child link="b5" />
+        <axis xyz="0 1 0" />
+        <limit lower="-100" upper="100" effort="10000" velocity="299792458" />
+    </joint>
+
+    <!-- Roll of the suspension on the track-->
+    <joint name="roll" type="revolute">
+        <parent link="b5" />
+        <child link="b6" />
+        <axis xyz="1 0 0" />
+        <limit lower="-100" upper="100" effort="10000" velocity="299792458" />
+    </joint>
+</robot>
