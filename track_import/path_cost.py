@@ -64,7 +64,7 @@ class PathCost:
 
         return self.e(t, x, q) + self.r_c(u) + self.r_w(u)
 
-    def sample_cost(self, track: Track, sample_t: np.ndarray) -> float:
+    def sample_cost(self, track: Track, sample_t: np.ndarray) -> tuple[np.ndarray, float]:
         """
         Calculates error at various given points.
 
