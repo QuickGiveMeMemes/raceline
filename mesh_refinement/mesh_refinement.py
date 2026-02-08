@@ -1,7 +1,7 @@
-
 from track_import.track import Track
 from collocation import Collocation
 import numpy as np
+
 
 class MeshRefinement:
     def __init__(self, collocation: Collocation, refinement_configs: dict):
@@ -9,31 +9,34 @@ class MeshRefinement:
         self.conf = refinement_configs
 
     def run(self):
-        
         initial_collocation = self.conf["initial_collocation"]
         initial_mesh_points = self.conf["initial_mesh_points"]
         refinement_steps = self.conf["refinement_steps"]
+        sample_res = self.conf["config"]["sampling_resolution"]
 
-        self.t = np.linspace(self.colloc.start_t, self.colloc.end_t, initial_mesh_points)  # Mesh points
-
+        # Generates initial set of mesh points
+        self.t = np.linspace(
+            self.colloc.start_t, self.colloc.end_t, initial_mesh_points
+        )
         self.N = np.array(
             [initial_collocation] * (initial_mesh_points - 1)
         )  # Collocation points per interval
 
-        # Initial optimized
+        # Runs iter of collocation on initial points
         track = self.colloc.iteration(t, N)
 
-        sample_t = np.linspace(
-            self.colloc.start_t, self.colloc.end_t,
-            math.ceil(max_dist / self.conf["config"]["sampling_resolution"]),
-        )
-
+        # Samples finely for cost function error
         best_eval = track
         best_iter = 0
+        sample_t = np.linspace(
+            self.colloc.start_t,
+            self.colloc.end_t,
+            math.ceil(max_dist / sample_res),
+        )
         best_cost, _ = self.colloc.sample_cost(track, sample_t)
         print(f"Sampled error: {best_cost:e}")
 
-        # Refinement
+        # Iteratively runs mesh refinement
         for i in range(refinement_steps):
             print(f"Refinement step {i + 1}/{refinement_steps}")
             N, t = self.mesh_iteration()
@@ -50,11 +53,13 @@ class MeshRefinement:
                 best_iter = i + 1
                 best_cost = new_cost
 
-        track.ccw = ccw
+        track.ccw = ccw     # TODO what is this
 
-        print(f"Fitting finished. Chose iteration {best_iter} with cost evaluation {best_cost}.")
+        print(
+            f"Fitting finished. Chose iteration {best_iter} with cost evaluation {best_cost}."
+        )
         return best_eval
-    
+
     def mesh_iteration(self):
         resolution = self.conf["sampling_resolution"]
         variation_thres = self.conf["variation_threshold"]
@@ -78,7 +83,9 @@ class MeshRefinement:
 
             # Sample t, remove first so it cannot be added multiple times
             # assert end_t != start_t
-            sample_t = np.linspace(start_t, end_t, math.ceil((end_t - start_t) / resolution))[1:]
+            sample_t = np.linspace(
+                start_t, end_t, math.ceil((end_t - start_t) / resolution)
+            )[1:]
             samples.append(sample_t)
 
             # Compute costs across interval i at the end of each t
@@ -89,7 +96,9 @@ class MeshRefinement:
             interval_costs.append(costs)
 
         # TODO this is an approximation, check if it is satisfactory
-        geo_mean_cost = np.exp(geo_mean_cost / ((track.t[-1] - track.t[0]) / resolution))
+        geo_mean_cost = np.exp(
+            geo_mean_cost / ((track.t[-1] - track.t[0]) / resolution)
+        )
 
         for i, start_t in enumerate(interval_starts):
             end_t = track.t[i + 1]
@@ -135,8 +144,8 @@ class MeshRefinement:
 
                 new_t.append(end_t)
 
-        print(f"Degree increased: {deg_counter}\tDivided: {div_counter}\tSkipped: {skip_counter}")
+        print(
+            f"Degree increased: {deg_counter}\tDivided: {div_counter}\tSkipped: {skip_counter}"
+        )
         assert len(new_N) + 1 == len(new_t)
         return np.asarray(new_N), np.asarray(new_t)
-    
-    
