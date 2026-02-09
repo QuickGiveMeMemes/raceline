@@ -1,165 +1,299 @@
 from dataclasses import dataclass
 
-# from track_import.track import Track
+from track_import.track import Track
 import casadi as ca
+import pinocchio as pin
 from pinocchio import casadi as cpin
 import numpy as np
 import yaml
+from mlt.pacejka import AWSIMPacejka
+from itertools import product
 
 
 @dataclass
 class VehicleProperties:
-    # Car properties sheet for the Dallara AV-24. Values are taken from Autonoma AWSIM + PAIRSim parameters.
 
     # Mass properties
-    m_sprung: 750  # Sprung mass
-    m_unsprung: 40  # Unsprung mass
+    m_sprung: float  # Sprung mass
+    m_unsprung: float  # Unsprung mass
 
     # Inertia properties
-    i_xx: 550  # Roll inertia
-    i_yy: 800  # Pitch inertia
-    i_zz: 265  # Yaw inertia
+    i_xx: float  # Roll inertia
+    i_yy: float  # Pitch inertia
+    i_zz: float  # Yaw inertia
 
     # Geometry properties
-    g_com_h: 0.2  # COM height
-    g_a1: 1.7  # Front axle to COM
-    g_a2: 1.3  # Rear axle to COM
-    g_t1: 1.676  # Front track width
-    g_t2: 1.58  # Rear track width
-    g_S: 1  # Frontal area
-    g_hq1: 0.06  # Front Roll Center (guess)
-    g_hq2: 0.12  # Rear Roll Center  (guess)
+    g_com_h: float  # COM height
+    g_a: list  # Axles to COM [front, rear]
+    g_t1: list  # Track widths [front, rear]
+    g_S: float  # Frontal area
+    g_hq1: list  # Roll centers [front, rear] (guess)
 
     # Aero properties
     a_Cx: 0.8581  # Drag coeff
-    a_Cz1: 0.65  # Downforce coeff (front)
-    a_Cz2: 1.18  # Downforce coeff (rear)
+    a_Cz: list  # Downforce coeff [front, rear]
 
     # Suspension
-    s_k11: 2.0e5  # Spring stiffness FL
-    s_k12: 2.0e5  # Spring stiffness FR
-    s_k21: 2.0e5  # Spring stiffness RL
-    s_k22: 2.0e5  # Spring stiffness RR
-    s_c11: 8.0e3  # Damping coeff FL
-    s_c12: 8.0e3  # Damping coeff FR
-    s_c21: 8.0e3  # Damping coeff RL
-    s_c22: 8.0e3  # Damping coeff RR
+    s_k: list  # Spring stiffness [[FL, FR], [RL, RR]]
+    s_c: list  # Damping coeff [[FL, FR], [RL, RR]]
 
     # Tire
-    t_rw1: 0.3  # Front tire radius
-    t_rw2: 0.326  # Rear tire radius
-    t_Dy_1: 1.5
-    t_Dy_2: 1.55
-    t_Dy2_1: -0.2
-    t_Dy2_2: -0.2
-    t_Cy1: 1.5
-    t_Cy2: 1.5
-    t_sypeak1: 0.087
-    t_sypeak2: 0.079
-    t_Fznom1: 1700
-    t_Fznom2: 2200
-    t_Ey1: 0
-    t_Ey2: 0
-
+    t_rw: list  # Tire radius [front, rear]
+    t_Dy1: list
+    t_Dy2: list
+    t_Cy: list
+    t_sypeak: list
+    t_Fznom: list
+    t_Ey: list
     # Setup
     p_kb: 0.5  # Brake Bias
-    p_karb1: 436593  # Front ARB stiffness
-    p_karb2: 0  # Rear ARB stiffness
+    p_karb: list  # ARB stiffness [front, rear]
 
     @staticmethod
     def load_yaml(config):
         with open(config, "r") as f:
             all_things = yaml.safe_load(f)
 
-        print(all_things)
-
         return VehicleProperties(**all_things)
 
 
+@dataclass
+class EnvProperties:
+    rho: 1.1839  # kg / m3
+
+
 class Vehicle:
-    def __init__(self, config):
-        # self.model = pin.buildModelsFromUrdf("vehicle.urdf", root_joint=pin.JointModelFreeFlyer())
-        self.model = cpin.Model()
-        self.properties = VehicleProperties.load_yaml(config)
+    def __init__(self, config, track, opti: ca.Opti):
 
-        # self.track = Track
+        # Loading vehicle configuration properties
+        self.prop = VehicleProperties.load_yaml(config)
+        self.env = EnvProperties(1.1839)
+        self.track = track
+        self.pacejka = [
+            AWSIMPacejka(
+                self.prop.t_sypeak[i],
+                self.prop.t_Cy[i],
+                self.prop.t_Dy1[i],
+                self.prop.t_Dy2[i],
+                self.prop.t_Fznom[i],
+                self.prop.t_Ey[i],
+            )
+            for i in range(2)
+        ]
 
-        # default_pose =
+        # Initializing numeric model
+        self.model = pin.Model()
+        self._init_pin_tree()
+
+        # Initializes symbolic CasADi modules
+        self.opti = opti
+        self.cmodel = cpin.Model(self.model)
+        self.cdata = self.cmodel.createData()
+
+        # Initializes CasADi functions
+        self._init_w3_func()
+        self._init_w6_func()
+
+    def _init_pin_tree(self):
+        """
+        Initializes the pinocchio vehicle model
+        """
 
         # Floating track joint
         self.track_id = self.model.addJoint(
-            0, cpin.JointModelFreeFlyer(), cpin.SE3.Identity(), "track"
+            0,
+            pin.JointModelFreeFlyer(),
+            pin.SE3.Identity(),
+            "track",
         )
         # Prismatic defining vehicle position on track
         self.road_lat_id = self.model.addJoint(
-            self.track_id, cpin.JointModelPY(), cpin.SE3.Identity(), "road_lat"
+            self.track_id,
+            pin.JointModelPY(),
+            pin.SE3.Identity(),
+            "road_lat",
         )
         # Revolute defining vehicle yaw
         self.yaw_id = self.model.addJoint(
-            self.road_lat_id, cpin.JointModelRZ(), cpin.SE3.Identity(), "yaw"
+            self.road_lat_id,
+            pin.JointModelRZ(),
+            pin.SE3.Identity(),
+            "yaw",
         )
         # Prismatic defining suspension vertical travel
         self.vert_id = self.model.addJoint(
-            self.yaw_id, cpin.JointModelPZ(), cpin.SE3.Identity(), "vert"
+            self.yaw_id,
+            pin.JointModelPZ(),
+            pin.SE3.Identity(),
+            "vert",
         )
         # Revolute defining vehicle pitch
         self.pitch_id = self.model.addJoint(
-            self.vert_id, cpin.JointModelRY(), cpin.SE3.Identity(), "pitch"
+            self.vert_id,
+            pin.JointModelRY(),
+            pin.SE3.Identity(),
+            "pitch",
         )
         # Revolute defining vehicle roll
         self.roll_id = self.model.addJoint(
-            self.pitch_id, cpin.JointModelRX(), cpin.SE3.Identity(), "roll"
+            self.pitch_id,
+            pin.JointModelRX(),
+            pin.SE3.Identity(),
+            "roll",
         )
 
-        self.unsprung = cpin.Inertia(
-            self.properties.m_unsprung, np.zeros(3), np.zeros((3, 3))
-        )
-        self.sprung = cpin.Inertia(
-            self.properties.m_sprung,
-            np.array([0, 0, self.properties.g_com_h]),
+        # Defines inertial/mass values
+        self.unsprung = pin.Inertia(self.prop.m_unsprung, np.zeros(3), np.zeros((3, 3)))
+        self.sprung = pin.Inertia(
+            self.prop.m_sprung,
+            np.zeros(3),
             np.diag(
                 [
-                    self.properties.i_xx,
-                    self.properties.i_yy,
-                    self.properties.i_zz,
+                    self.prop.i_xx,
+                    self.prop.i_yy,
+                    self.prop.i_zz,
                 ]
             ),
         )
-
         self.model.appendBodyToJoint(self.yaw_id, self.unsprung, pin.SE3.Identity())
         self.model.appendBodyToJoint(
             self.roll_id,
             self.sprung,
-            cpin.SE3(np.eye(3), np.array([0, 0, self.properties.g_com_h])),
+            pin.SE3(np.eye(3), np.array([0, 0, self.prop.g_com_h])),
         )
 
-        self.data = self.model.createData()
+    def _init_w6_func(self):
+        """
+        Generates W66E, the external aerodynamic wrench.
+        """
 
-    def rnea(self, q: np.ndarray, v: np.ndarray, a: np.ndarray, f_ext: list[cpin.Force]) -> tuple[np.ndarray, tuple[float, float, float]]:
+        v_3 = ca.MX.sym("v_3", 6)
+
+        w6 = (
+            -self.env.rho
+            / 2
+            * self.prop.g_S
+            * (v_3[0]) ** 2
+            * ca.vertcat(
+                self.prop.a_Cx,
+                self.prop.a_Cz[0] + self.prop.a_Cz[1],
+                self.prop.a_Cz[1] * self.prop.g_a[1] - self.prop.a_Cz[1] * self.prop.g_a[1],
+            )
+        )
+
+        self.w6_func = ca.Function("W6", [v_3], [w6])
+
+    def _init_w3_func(self):
+        """
+        Initializes W33E, the external tire force wrench.
+        """
+
+        u = ca.MX.sym("u", 3)  # Control [f_xa, f_xb, delta]
+        v_3 = ca.MX.sym("v_3", 6)  # Twist vector (frame 3)
+        f_z = ca.MX.sym("f_z", 2, 2)  # z forces on each wheel
+        f_xa, f_xb, delta = ca.vertsplit(u)
+        v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
+
+        # Defining tire slip alpha
+        alpha_out = ca.vertcat(
+            delta - (v_3y + omega_3z * self.prop.g_a[0]) / v_3x,
+            -(v_3y - omega_3z * self.prop.g_a[1]) / v_3x,
+        )
+        alpha = ca.Function("alpha", [v_3, u], [alpha_out])(v_3, u)
+
+        # Defining Pacejka lateral force f_ijy
+        f_y_out = ca.vertcat(
+            *[
+                ca.horzcat(*[self.pacejka[i](alpha[i], f_z[i, j]) for j in range(2)])
+                for i in range(2)
+            ]
+        )
+        f_y = ca.Function("f_y", [f_z, u, v_3], [f_y_out])(f_z, u, v_3)
+
+        # Defining longitudinal force f_ijx
+        f_x_out = ca.vertcat(
+            ca.horzcat(*(2 * [f_xb * self.prop.p_kb / 2])),
+            ca.horzcat(*(2 * [f_xb * (1 - self.prop.p_kb) + f_xa])) / 2,
+        )
+        f_x = ca.Function("f_x", [u], [f_x_out])(u)
+
+        # Defines expressions X1, X2, Y1, Y2
+        self.X1_func = ca.Function(
+            "X1",
+            [f_z, u, v_3],
+            [(f_x[0, 0] + f_x[0, 1]) * ca.cos(delta) - (f_y[0, 0] + f_y[0, 1]) * ca.sin(delta)],
+        )
+        self.X2_func = ca.Function("X2", [f_z, u, v_3], [f_x[1, 0] + f_x[1, 1]])
+        self.Y1_func = ca.Function(
+            "Y1",
+            [f_z, u, v_3],
+            [(f_y[0, 0] + f_y[0, 1]) * ca.cos(delta) + (f_x[0, 0] + f_x[0, 1]) * ca.sin(delta)],
+        )
+        self.Y2_func = ca.Function("Y2", [f_z, u, v_3], [f_y[1, 0] + f_y[1, 1]])
+
+        # Define W3e
+        X1 = self.X1_func(f_z, u, v_3)
+        X2 = self.X2_func(f_z, u, v_3)
+        Y1 = self.Y1_func(f_z, u, v_3)
+        Y2 = self.Y2_func(f_z, u, v_3)
+        w3e = ca.vertcat(X1 + X2, Y1 + Y2, Y1 * self.prop.g_a[0] - Y2 * self.prop.g_a[1])
+        self.w3e_func = ca.Function("W3e", [f_z, u, v_3], [w3e])
+
+    def rnea(
+        self, q: ca.MX, q_dot: ca.MX, q_ddot: ca.MX, f_ext: list[cpin.Force]
+    ) -> tuple[np.ndarray, tuple[float, float, float]]:
+        """
+        Performs RNEA
+
+        Args:
+            q (np.ndarray): States of all the joints, including track
+            v (np.ndarray): _description_
+            a (np.ndarray): _description_
+            f_ext (list[cpin.Force]): _description_
+
+        Returns:
+            tuple[np.ndarray, tuple[float, float, float]]: Torques (τ1, ..., τ6) and structural wrench components (f3z, m3x, m3y)
+        """
+
+        
+
+
         torques = cpin.rnea(self.model, self.data, q, v, a, f_ext)
 
-        return torques, (self.data.f[3].linear[3], self.data.f[3].angular[0], self.data.f[3].angular[1])
+        return torques, (
+            self.data.f[3].linear[3],
+            self.data.f[3].angular[0],
+            self.data.f[3].angular[1],
+        )
 
-    
+    def set_constraints(self, q, dq, ddq, z, v_3):
+        v_3x, v_3y, v_3z = ca.vertsplit(v_3)
+
+        torques, (f_3z, m_3x, m_3y) = self.rnea(q, dq, ddq)
+
+        for i in range(3):
+            self.opti.subject_to(torques[i] == 0)
+        # self.opti.subject_to(torques[3] == )
 
 
 if __name__ == "__main__":
-    v = Vehicle("vehicle_properties/DallaraAV24.yaml")
-    print(v.model)
-    print(v.model.nbodies)
-    foo = v.model
+    v = Vehicle("mlt/vehicle_properties/DallaraAV24.yaml", None, ca.Opti())
+    v._init_w3_func()
+    v.w3e_func.generate("foo")
+    print(v.w3e_func(np.random.randn(2, 2), np.random.randn(3), np.random.randn(6)))
+    # print(v.model)
+    # print(v.model.nbodies)
+    # foo = v.model
 
-    print(cpin.neutral(foo))
-    f_ext = [cpin.Force.Zero() for _ in range(foo.njoints)]
+    # print(cpin.neutral(foo))
+    # f_ext = [cpin.Force.Zero() for _ in range(foo.njoints)]
 
-    f_ext[6] = cpin.Force(np.array([0, 0, -1000]), np.array([0, 0, 0]))
-    data = foo.createData()
+    # f_ext[6] = cpin.Force(np.array([0, 0, -1000]), np.array([0, 0, 0]))
+    # data = foo.createData()
 
-    torques = cpin.rnea(
-        foo, data, cpin.neutral(foo), np.zeros(foo.nv), np.zeros(foo.nv), f_ext
-    )
-    print(torques)
-    print(data.f[3])
+    # torques = cpin.rnea(foo, data, cpin.neutral(foo), np.zeros(foo.nv), np.zeros(foo.nv), f_ext)
+    # print(torques)
+    # print(data.f[3])
 
     # for i in range(foo.njoints):
     #     print(f"Index {i}: {foo.names[i]}, mass={foo.inertias[i].mass:.4f}")

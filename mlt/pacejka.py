@@ -1,5 +1,6 @@
-from typing import Callable, override
+from typing import Callable
 import casadi as ca
+import numpy as np
 
 class PacejkaModel:
     """
@@ -20,11 +21,10 @@ class AWSIMPacejka(PacejkaModel):
     An extension of the Pacejka class that specifically uses the AWSIM simplified Pacejka model
     """
 
-    @override
-    def __init__(self, By: float, Cy: float, Dy: float, Dy2: float, Fznom: float, Ey: float):
+    def __init__(self, slip_peak: float, Cy: float, Dy1: float, Dy2: float, Fznom: float, Ey: float):
         super().__init__(
-            lambda _: By,
+            lambda _: np.pi / (2 * Cy * slip_peak),
             lambda _: Cy,
-            lambda fz: fz * (Dy + Dy2 * (fz - Fznom) / Fznom),
+            lambda fz: fz * (Dy1 + Dy2 * (fz - Fznom) / Fznom),
             lambda _: Ey
         )

@@ -4,57 +4,38 @@
 # Car properties sheet for the Dallara AV-24. Values are taken from Autonoma AWSIM + PAIRSim parameters.
 
 # Mass properties
-m_sprung: 750       # Sprung mass
-m_unsprung: 40      # Unsprung mass
+m_sprung: 750                                   # Sprung mass
+m_unsprung: 40                                  # Unsprung mass
 
 # Inertia properties
-i_xx: 550           # Roll inertia
-i_yy: 800           # Pitch inertia
-i_zz: 265           # Yaw inertia
+i_xx: 550                                       # Roll inertia
+i_yy: 800                                       # Pitch inertia
+i_zz: 265                                       # Yaw inertia
 
 # Geometry properties
-g_com_h: 0.2        # COM height
-g_a1: 1.7           # Front axle to COM
-g_a2: 1.3           # Rear axle to COM
-g_t1: 1.676         # Front track width
-g_t2: 1.58          # Rear track width
-g_S: 1              # Frontal area
-g_hq1: 0.06         # Front Roll Center (guess)
-g_hq2: 0.12         # Rear Roll Center  (guess)
+g_com_h: 0.2                                    # COM height
+g_a: [1.7, 1.3]                                 # Axles to COM [front, rear]
+g_t1: [1.676, 1.58]                             # Track widths [front, rear]
+g_S: 1                                          # Frontal area
+g_hq1: [0.06, 0.12]                             # Roll centers [front, rear] (guess)
 
 # Aero properties
-a_Cx: 0.8581        # Drag coeff
-a_Cz1: 0.65         # Downforce coeff (front)
-a_Cz2: 1.18         # Downforce coeff (rear)
+a_Cx: 0.8581                                    # Drag coeff
+a_Cz: [0.65, 1.18]                              # Downforce coeff [front, rear]
 
 # Suspension
-s_k11: 2.0e+5       # Spring stiffness FL
-s_k12: 2.0e+5       # Spring stiffness FR
-s_k21: 2.0e+5       # Spring stiffness RL
-s_k22: 2.0e+5       # Spring stiffness RR
-s_c11: 8.0e+3       # Damping coeff FL
-s_c12: 8.0e+3       # Damping coeff FR
-s_c21: 8.0e+3       # Damping coeff RL
-s_c22: 8.0e+3       # Damping coeff RR
+s_k: [[2.0e+5, 2.0e+5], [2.0e+5, 2.0e+5]]       # Spring stiffness [[FL, FR], [RL, RR]]
+s_c: [[8.0e+3, 8.0e+3], [8.0e+3, 8.0e+3]]       # Damping coeff [[FL, FR], [RL, RR]]
 
 # Tire
-t_rw1: 0.3          # Front tire radius
-t_rw2: 0.326        # Rear tire radius
-t_Dy_1: 1.5
-t_Dy_2: 1.55
-t_Dy2_1: -0.2
-t_Dy2_2: -0.2
-t_Cy1: 1.5
-t_Cy2: 1.5
-t_sypeak1: 0.087
-t_sypeak2: 0.079
-t_Fznom1: 1700
-t_Fznom2: 2200
-t_Ey1: 0
-t_Ey2: 0
+t_rw: [0.3, 0.326]                              # Tire radius [front, rear]
+t_Dy1: [1.5, 1.55]
+t_Dy2: [-0.2, -0.2]
+t_Cy: [1.5, 1.5]
+t_sypeak: [0.087, 0.079]
+t_Fznom: [1700, 2200]
+t_Ey: [0, 0]
 
 # Setup
-p_kb: 0.5           # Brake Bias
-p_karb1: 436593     # Front ARB stiffness
-p_karb2: 0          # Rear ARB stiffness
-
+p_kb: 0.5                                       # Brake Bias
+p_karb: [436593, 0]                             # ARB stiffness [front, rear]
