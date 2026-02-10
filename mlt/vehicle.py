@@ -63,7 +63,7 @@ class EnvProperties:
 
 
 class Vehicle:
-    def __init__(self, config, track, opti: ca.Opti):
+    def __init__(self, config, track: Track, opti: ca.Opti):
 
         # Loading vehicle configuration properties
         self.prop = VehicleProperties.load_yaml(config)
@@ -188,9 +188,9 @@ class Vehicle:
         Initializes W33E, the external tire force wrench.
         """
 
-        u = ca.MX.sym("u", 3)  # Control [f_xa, f_xb, delta]
-        v_3 = ca.MX.sym("v_3", 6)  # Twist vector (frame 3)
-        f_z = ca.MX.sym("f_z", 2, 2)  # z forces on each wheel
+        u = ca.SX.sym("u", 3)  # Control [f_xa, f_xb, delta]
+        v_3 = ca.SX.sym("v_3", 6)  # Twist vector (frame 3)
+        f_z = ca.SX.sym("f_z", 2, 2)  # z forces on each wheel
         f_xa, f_xb, delta = ca.vertsplit(u)
         v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
 
@@ -240,7 +240,14 @@ class Vehicle:
         self.w3e_func = ca.Function("W3e", [f_z, u, v_3], [w3e])
 
     def rnea(
-        self, q: ca.MX, q_dot: ca.MX, q_ddot: ca.MX, f_ext: list[cpin.Force]
+        self,
+        q_1: float,
+        q_1_dot: ca.SX,
+        q_1_ddot: ca.SX,
+        q: ca.SX,
+        q_dot: ca.SX,
+        q_ddot: ca.SX,
+        f_ext: list[cpin.Force],
     ) -> tuple[np.ndarray, tuple[float, float, float]]:
         """
         Performs RNEA
@@ -254,9 +261,21 @@ class Vehicle:
         Returns:
             tuple[np.ndarray, tuple[float, float, float]]: Torques (τ1, ..., τ6) and structural wrench components (f3z, m3x, m3y)
         """
+        # Calculates track position, vel, accel
+        trk_q = self.track.state(np.array([q_1]) * self.track.length)[0]
+        trk_v = self.track.der_state(np.array([q_1]) * self.track.length, n=1)[0]
+        trk_a = self.track.der_state(np.array([q_1]) * self.track.length, n=2)[0]
 
-        
+        # Calculates SE3 (track joint position)
+        R = pin.rpy.rpyToMatrix(*trk_q[3:6][::-1])  # We store in zyx (yaw, pitch, roll)
+        p = np.array(trk_q[:3])
+        track_q = pin.SE3(R, p)
 
+        # Calculates V (track velocity)
+        J = np.concatenate(
+            trk_v[:3] / np.linalg.norm(trk_v[:3]),
+            
+        )
 
         torques = cpin.rnea(self.model, self.data, q, v, a, f_ext)
 
