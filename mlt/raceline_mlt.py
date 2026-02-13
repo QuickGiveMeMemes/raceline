@@ -68,6 +68,7 @@ class MLTCollocation(PSCollocation):
             dQ = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k])
             ddQ = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ)
             Q_1_ddot = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k]
+
             Q_dot.append(dQ * Q_1_dot[k])
             Q_ddot.append(ddQ * Q_1_dot[k] ** 2 + dQ * Q_1_ddot)
 
@@ -78,7 +79,8 @@ class MLTCollocation(PSCollocation):
                 opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
 
             # Collocation constraints (enforces dynamics on X)
-            for k in range(0, N[k] + 1):
+            for k in range(0, N[k] + 1): # FIXME
+                self.vehicle.set_constraints(Q_1[k], Q_1_dot[k], Q_1_ddot[k], Q[k], dQ[k], ddq[k], Z[k], U[k])
                 q_1 = ca.vertcat
 
 
