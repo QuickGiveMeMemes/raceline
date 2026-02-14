@@ -27,11 +27,11 @@ class VehicleProperties:
     g_a: list  # Axles to COM [front, rear]
     g_t: list  # Track widths [front, rear]
     g_S: float  # Frontal area
-    g_hq1: list  # Roll centers [front, rear] (guess)
-    g_steer_max = 0.179008128  # Max steering angle
+    g_hq: list  # Roll centers [front, rear] (guess)
+    g_steer_max: float  # Max steering angle
 
     # Aero properties
-    a_Cx: 0.8581  # Drag coeff
+    a_Cx: float  # Drag coeff
     a_Cz: list  # Downforce coeff [front, rear]
 
     # Suspension
@@ -53,7 +53,7 @@ class VehicleProperties:
     e_max: float  # Max engine power
 
     # Setup
-    p_kb: 0.5  # Brake Bias
+    p_kb: float  # Brake Bias
     p_karb: list  # ARB stiffness [front, rear]
 
     @staticmethod
@@ -64,24 +64,24 @@ class VehicleProperties:
         return VehicleProperties(**all_things)
 
     def p_phi_1(self, p):
-        return (p[0, 0] + p[0, 1]) / 4 * self.g_t[0] ** 2 + self.p_karb[0]
+        return (p[0][0] + p[0][1]) / 4 * self.g_t[0] ** 2 + self.p_karb[0]
 
     def p_phi_2(self, p):
-        return (p[1, 0] + p[1, 1]) / 4 * self.g_t[1] ** 2 + self.p_karb[1]
+        return (p[1][0] + p[1][1]) / 4 * self.g_t[1] ** 2 + self.p_karb[1]
 
     def p_phi(self, p):
         return self.p_phi_1(p) + self.p_phi_2(p)
 
     def p_theta(self, p):
-        (p[0, 0] + p[0, 1]) * self.g_a[0] ** 2 + (p[1, 0] + p[1, 1]) * self.g_a[1] ** 2
+        return (p[0][0] + p[0][1]) * self.g_a[0] ** 2 + (p[1][0] + p[1][1]) * self.g_a[1] ** 2
 
     def p(self, p):
-        return p[0, 0] + p[0, 1] + p[1, 0] + p[1, 1]
+        return p[0][0] + p[0][1] + p[1][0] + p[1][1]
 
 
 @dataclass
 class EnvProperties:
-    rho: 1.1839  # kg / m3
+    rho: float = 1.1839  # kg / m3
 
 
 class Vehicle:
@@ -200,7 +200,7 @@ class Vehicle:
             * ca.vertcat(
                 self.prop.a_Cx,
                 self.prop.a_Cz[0] + self.prop.a_Cz[1],
-                self.prop.a_Cz[1] * self.prop.g_a[1] - self.prop.a_Cz[1] * self.prop.g_a[1],
+                self.prop.a_Cz[1] * self.prop.g_a[1] - self.prop.a_Cz[0] * self.prop.g_a[0],
             )
         )
 
@@ -217,27 +217,26 @@ class Vehicle:
         f_xa, f_xb, delta = ca.vertsplit(u)
         v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
 
-        # Defining tire slip alpha
+        # Tyre slip (alpha)
         alpha_out = ca.vertcat(
             delta - (v_3y + omega_3z * self.prop.g_a[0]) / v_3x,
             -(v_3y - omega_3z * self.prop.g_a[1]) / v_3x,
         )
         alpha = ca.Function("alpha", [v_3, u], [alpha_out])(v_3, u)
 
-        # Defining Pacejka lateral force f_ijy
-        f_y_out = ca.vertcat(
-            *[
-                ca.horzcat(*[self.pacejka[i](alpha[i], f_z[i, j]) for j in range(2)])
-                for i in range(2)
-            ]
+        # Pacejka lateral force (f_ijy)
+        f_y_out = ca.SX(
+            [[self.pacejka[i](alpha[i], f_z[i, j]) for j in range(2)] for i in range(2)]
         )
         self.f_y_func = ca.Function("f_y", [f_z, u, v_3], [f_y_out])
         f_y = self.f_y_func(f_z, u, v_3)
 
-        # Defining longitudinal force f_ijx
-        f_x_out = ca.vertcat(
-            ca.horzcat(*(2 * [f_xb * self.prop.p_kb / 2])),
-            ca.horzcat(*(2 * [f_xb * (1 - self.prop.p_kb) + f_xa])) / 2,
+        # Longitudinal tyre force (f_ijx)
+        f_x_out = ca.SX(
+            [
+                [f_xb * self.prop.p_kb / 2] * 2,
+                [(f_xb * (1 - self.prop.p_kb) + f_xa) / 2] * 2,
+            ]
         )
         f_x = ca.Function("f_x", [u], [f_x_out])(u)
 
@@ -270,7 +269,7 @@ class Vehicle:
         v_3 = ca.SX.sym("v_3", 6)  # Twist vector (frame 3)
         f_z = ca.SX.sym("f_z", 2, 2)  # z forces on each wheel
 
-        f_za = ca.SX.sym("f_za", 2)  # Aerodynamic downforce
+        # f_za = ca.SX.sym("f_za", 2)  # Aerodynamic downforce
 
         # RNEA outputs for W_3J
         f_3z = ca.SX.sym("f_3z")  # Downforce
@@ -280,36 +279,42 @@ class Vehicle:
         # W6
         m_ya = ca.SX.sym("m_ya")
 
-        f_xa, f_xb, delta = ca.vertsplit(u)
+        # f_xa, f_xb, delta = ca.vertsplit(u)
         v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
         f_1z, f_2z = ca.vertsplit(f_z)
-        f_11z, f_12z = ca.horzsplit(f_1z)
-        f_21z, f_22z = ca.horzsplit(f_2z)
+        # f_11z, f_12z = ca.horzsplit(f_1z)
+        # f_21z, f_22z = ca.horzsplit(f_2z)
 
-        # Static load
+        # Aerodynamic downforce (f_za)
+        f_za_out = ca.SX(
+            [(self.env.rho * self.prop.a_Cz[i] * self.prop.g_S * v_3x**2) / 4 for i in range(2)]
+        )
+        f_za = ca.Function("f_za", [v_3], [f_za_out])(v_3)
+
+        # Static load (f_z0)
         l = sum(self.prop.g_a)
-        f_z0_out = [
-            (f_3z - f_za) * ca.vertcat(*[(l - self.prop.g_a[i]) / (2 * l) for i in range(2)])
-        ]
-        f_z0 = ca.Function(
-            "f_zi0",
-            [v_3, f_za, f_3z],
-            f_z0_out,
-        )(v_3, f_za, f_3z)
+        f_z0_out = ca.SX(
+            [(f_3z - sum(f_za)) * ca.vertcat(*[(l - self.prop.g_a[i]) / (2 * l) for i in range(2)])]
+        )
+        f_z0 = ca.Function("f_z0", [v_3, f_za, f_3z], [f_z0_out])(v_3, f_za, f_3z)
 
-        # Aero downforce is passed in FIXME FIXME this is wrong! TODO CALCULATE FRONT AND REAR DOWNFORCES SEPARATELY FIXME!
+        # Longitudinal shift (delta_f_z)
+        delta_f_z = ca.Function("delta_f_z", [m_3y], [-(m_3y - m_ya) / (2 * l)])(m_3y)
 
-        # Longitudinal shift
-        delta_f_z = ca.Function("delta_f_z", [m_3y], [-(m_3y - m_ya) / (2 * l)])
-
-        # Lateral shift
-
-        # ==================================== Lateral load transfer ====================================
+        # Lateral load transfer (lateral_delta_f_z)
         Y = [self.Y1_func(f_z, u, v_3), self.Y2_func(f_z, u, v_3)]  # Lateral force on axles
-        k_phi = [self.prop.p_phi_1(self.prop.s_k), self.prop.p_phi_2(self.prop.s_k)]  # Roll stiff  # TODO precalculate
-
+        k_phi = [
+            self.prop.p_phi_1(self.prop.s_k),
+            self.prop.p_phi_2(self.prop.s_k),
+        ]  # Roll stiffness
         lateral_delta_f_z_out = [
-            (k_phi[i] / sum(k_phi) * (-m_3x - sum(Y)) + self.prop.g_hq1[i] * Y[i]) / self.prop.t[i]
+            (
+                k_phi[i]
+                / sum(k_phi)
+                * (-m_3x - (Y[0] * self.prop.g_hq[0] + Y[1] * self.prop.g_hq[1]))
+                + self.prop.g_hq[i] * Y[i]
+            )
+            / self.prop.g_t[i]
             for i in range(2)
         ]
         lateral_delta_f_z = ca.Function(
@@ -319,13 +324,7 @@ class Vehicle:
         # ========================= Calculate f_z (All vertical forces on tires) =========================
         f_z_out = ca.SX(
             [
-                [
-                    f_z0[i]
-                    + f_za[i]
-                    + delta_f_z(m_3y)
-                    + (-1) ** j * lateral_delta_f_z[i]  # TODO fix fza
-                    for j in range(2)
-                ]
+                [f_z0[i] + f_za[i] + delta_f_z + (-1) ** j * lateral_delta_f_z[i] for j in range(2)]
                 for i in range(2)
             ]
         )
@@ -357,16 +356,16 @@ class Vehicle:
             tuple[np.ndarray, tuple[float, float, float]]: Torques (τ1, ..., τ6) and structural wrench components (f3z, m3x, m3y)
         """
 
-        # Calculates track position, vel, accel
-        track_q = self.track.state(np.array([q_1]) * self.track.length)[0]
-        track_v_spacial = self.track.der_state(np.array([q_1]) * self.track.length, n=1)[0]
-        track_a_spacial = self.track.der_state(np.array([q_1]) * self.track.length, n=2)[0]
+        # Calculates track vel, accel
+        # track_q = self.track.state(np.array([q_1]) * self.track.length)[0]
+        track_v_spatial = self.track.der_state(np.array([q_1]) * self.track.length, n=1)[0]
+        track_a_spatial = self.track.der_state(np.array([q_1]) * self.track.length, n=2)[0]
 
         # Convert from [0, 1] normalized parameter to arc length to time derivative
-        track_v = track_v_spacial * q_1_dot
+        track_v = track_v_spatial * q_1_dot
         track_a = (
-            track_a_spacial * self.track.length**2 * q_1_dot**2
-            + track_v_spacial * self.track.length * q_1_ddot
+            track_a_spatial * self.track.length**2 * q_1_dot**2
+            + track_v_spatial * self.track.length * q_1_ddot
         )
 
         se3 = self.track.se3_state(q_1 * self.track.length)
@@ -393,7 +392,7 @@ class Vehicle:
             ]
         )
 
-        torques = cpin.rnea(self.model, self.data, q, v, a, f_ext)
+        torques = cpin.rnea(self.model, self.cdata, q, v, a, f_ext)
 
         # TODO check these indicies!
         return (
@@ -419,7 +418,7 @@ class Vehicle:
         f_ext = [cpin.Force.Zero() for _ in range(self.model.njoints)]
 
         f_3x, f_3y, m_3z = ca.vertsplit(self.w3e_func(f_z, u, v_3))
-        f_xa, f_za, m_ya = ca.vertsplit(self.w6_func(f_z, u, v_3))
+        f_xa, f_za, m_ya = ca.vertsplit(self.w6_func(v_3))
 
         # TODO Check these indicies
         f_ext[3] = cpin.Force(np.array([f_3x, f_3y, 0]), np.array([0, 0, m_3z]))
