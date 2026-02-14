@@ -6,6 +6,7 @@ from vehicle import Vehicle
 from mesh_refinement.collocation import PSCollocation
 import casadi as ca
 
+
 class MLTCollocation(PSCollocation):
 
     n_q: int = 5
@@ -39,7 +40,6 @@ class MLTCollocation(PSCollocation):
 
         # Constraints for each segment k
         for k in range(K):
-            
             # Generates continuous CasADi variables at collocation points
             if k == 0:
                 Q.append(self.opti.variable(N[k] + 2, self.n_q))
@@ -49,12 +49,10 @@ class MLTCollocation(PSCollocation):
                 # by setting them as the same variable
                 Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
                 Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 2, 1)))
-            
+
             # Generates discontinous CasADi variables at collocation points
             U.append(self.opti.variable(N[k] + 2, self.n_u))
             Z.append(self.opti.variable(N[k] + 2, self.n_z))
-
-
 
             # Generation of LG collocation points
             tau, w = np.polynomial.legendre.leggauss(N[k])  # w is the quadrature weights
@@ -65,7 +63,6 @@ class MLTCollocation(PSCollocation):
             norm_factor = (t[k + 1] - t[k]) / 2
             t_tau_0 = (t[k + 1] + t[k]) / 2  # Global time t at tau = 0
             t_tau = norm_factor * tau + t_tau_0  # Global time (t) at collocation points
-
 
             # Time derivative calculation
             dQ = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k])
@@ -81,14 +78,15 @@ class MLTCollocation(PSCollocation):
                 self.opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
 
             # Collocation constraints (enforces dynamics on X)
-            for k in range(0, N[k] + 1): # FIXME
-                self.vehicle.set_constraints(t_tau, Q_1_dot[k], Q_1_ddot[k], Q[k], dQ[k], ddQ[k], Z[k], U[k])
-                q_1 = ca.vertcat
-
+            self.vehicle.set_constraints(
+                t_tau, Q_1_dot[k], Q_1_ddot[k], Q[k], dQ[k], ddQ[k], Z[k], U[k]
+            )
 
             # Quadrature enforcement
             for j in range(N[k]):
-
-                lagrange_term = cost_fn(t_tau[j + 1], X[k][j + 1, :], Q[k][j + 1, :], ddQ[k][j + 1, :])
-
+                lagrange_term = MLTCollocation.cost(Q_1_dot[j + 1], U[j + 1], U[j])
                 J += norm_factor * w[j] * lagrange_term
+
+    @staticmethod
+    def cost(q_1_dot, u, prev_u, k_delta=1e-4, k_f=1e-4):
+        return 1 / q_1_dot + k_delta * (u[2] - prev_u[2]) + k_f * (u[0] * u[1])

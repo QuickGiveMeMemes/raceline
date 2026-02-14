@@ -50,13 +50,13 @@ class VehicleProperties:
     t_Ey: list
 
     # Engine
-    e_max = 341_000  # Max engine power
+    e_max: float  # Max engine power
 
     # Setup
     p_kb: 0.5  # Brake Bias
     p_karb: list  # ARB stiffness [front, rear]
 
-    @staticmethod
+    @staticmethodo
     def load_yaml(config):
         with open(config, "r") as f:
             all_things = yaml.safe_load(f)
@@ -183,6 +183,7 @@ class Vehicle:
             self.sprung,
             pin.SE3(np.eye(3), np.array([0, 0, self.prop.g_com_h])),
         )
+        print("test", self.road_lat_id)
 
     def _init_w6_func(self):
         """
@@ -442,22 +443,27 @@ class Vehicle:
 
         self.opti.subject_to(self.f_z_func(f_z, u, v_3, f_za, f_3z, m_3x, m_3y, m_ya) == f_z)
 
-        for i in range(3):
-            self.opti.subject_to(torques[i] == 0)
+        self.opti.subject_to(torques[6] == 0)  # road_lat
+        self.opti.subject_to(torques[7] == 0)  # yaw
 
         k = self.prop.p(self.prop.s_k) + self.prop.p_karb
         c = self.prop.p(self.prop.s_c)
 
+        # Vert
         self.opti.subject_to(
-            torques[3] == -self.prop.p(self.prop.s_k) * q[2] - self.prop.p(self.prop.s_c) * q_dot[2]
+            torques[8] == -self.prop.p(self.prop.s_k) * q[2] - self.prop.p(self.prop.s_c) * q_dot[2]
         )
+
+        # Pitch
         self.opti.subject_to(
-            torques[4]
+            torques[9]
             == -self.prop.p_theta(self.prop.s_k) * q[3]
             - self.prop.p_theta(self.prop.s_c) * q_dot[3]
         )
+
+        # Roll
         self.opti.subject_to(
-            torques[5]
+            torques[10]
             == -self.prop.p_phi(self.prop.s_k) * q[4] - self.prop.p_phi(self.prop.s_c) * q_dot[4]
         )
 
@@ -501,34 +507,52 @@ if __name__ == "__main__":
     v._init_w3_func()
     v.w3e_func.generate("foo")
     print(v.w3e_func(np.random.randn(2, 2), np.random.randn(3), np.random.randn(6)))
-    # print(v.model)
-    # print(v.model.nbodies)
-    # foo = v.model
+    print(v.model)
+    print(v.model.nbodies)
+    foo = v.model
 
-    # print(cpin.neutral(foo))
-    # f_ext = [cpin.Force.Zero() for _ in range(foo.njoints)]
+    f_ext = []
 
-    # f_ext[6] = cpin.Force(np.array([0, 0, -1000]), np.array([0, 0, 0]))
-    # data = foo.createData()
+    for i in range(v.cmodel.njoints):
+        f_ext.append(cpin.Force.Zero())
 
-    # torques = cpin.rnea(foo, data, cpin.neutral(foo), np.zeros(foo.nv), np.zeros(foo.nv), f_ext)
-    # print(torques)
-    # print(data.f[3])
+    print(cpin.Force.Zero())
 
-    # for i in range(foo.njoints):
-    #     print(f"Index {i}: {foo.names[i]}, mass={foo.inertias[i].mass:.4f}")
-    # print(qddot, type(qddot))
+    f_ext[6] = cpin.Force(ca.SX(np.array([0, 0, -1000, 0, 0, 0])))
+    data = v.cmodel.createData()
 
-    # for i in range(foo.njoints):
-    #     name = foo.names[i]
-    #     pos = data.oMi[i].translation
-    #     rot = data.oMi[i].rotation
+    print(f_ext)
 
-    #     print(f"Joint {i} ({name}):")
-    #     print(f"  Position: {pos}")
-    #     print(f"  Rotation:\n{rot}\n")
-    # # print(data.v.linear, data.v.angular)
-    # # print(data.a.linear, data.a.angular)
+    torques = cpin.rnea(
+        v.cmodel,
+        data,
+        ca.SX(np.zeros(foo.nq)),
+        ca.SX(np.zeros(foo.nv)),
+        ca.SX(np.zeros(foo.nv)),
+        f_ext,
+    )
+    print(torques, torques[2])
+    print(data.f[3])
 
-    # pin.computeAllTerms(foo, data, np.zeros(foo.nq), np.zeros(foo.nv),)
-    # print(data.M)
+    for i in range(foo.njoints):
+        print(f"Index {i}: {foo.names[i]}, mass={foo.inertias[i].mass:.4f}")
+    print(qddot, type(qddot))
+
+    for i in range(foo.njoints):
+        name = foo.names[i]
+        pos = data.oMi[i].translation
+        rot = data.oMi[i].rotation
+
+        print(f"Joint {i} ({name}):")
+        print(f"  Position: {pos}")
+        print(f"  Rotation:\n{rot}\n")
+    # print(data.v.linear, data.v.angular)
+    # print(data.a.linear, data.a.angular)
+
+    pin.computeAllTerms(
+        foo,
+        data,
+        np.zeros(foo.nq),
+        np.zeros(foo.nv),
+    )
+    print(data.M)
