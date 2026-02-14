@@ -6,6 +6,7 @@ import pinocchio as pin
 import pinocchio.casadi as cpin
 import casadi as ca
 
+
 class Track:
 
     def __init__(self, Q: list[np.ndarray], X: list[np.ndarray], t: np.ndarray):
@@ -35,9 +36,7 @@ class Track:
             tau = np.asarray([-1] + list(tau) + [1])
 
             self.poly.append(
-                scipy.interpolate.BarycentricInterpolator(
-                    tau, np.column_stack([X[k], Q[k]])
-                )
+                scipy.interpolate.BarycentricInterpolator(tau, np.column_stack([X[k], Q[k]]))
             )
 
     def __call__(self, s: np.ndarray) -> np.ndarray:
@@ -69,11 +68,9 @@ class Track:
         k = np.searchsorted(self.t[1:], s)
 
         tau, k = self.t_to_tau(s)
-        return np.asarray(
-            [self.poly[interval](parameter) for parameter, interval in zip(tau, k)]
-        )
-    
-    def se3_state(self, s:float) -> pin.SE3:
+        return np.asarray([self.poly[interval](parameter) for parameter, interval in zip(tau, k)])
+
+    def se3_state(self, s: float) -> pin.SE3:
         """
         Generates the SE3 pose of the track centerline at arc length s
 
@@ -82,12 +79,11 @@ class Track:
 
         Returns:
             pin.SE3: Generated SE3
-        """        
-        q = self.state(s)[0]
+        """
+        q = self.state(np.array([s]))[0]
         rot = cpin.rpy.rpyToMatrix(*q[3:6][::-1])
 
         return cpin.SE3(rot, ca.SX(q[:3]))
-
 
     def rotation_jacobians(self, s: float) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -98,11 +94,11 @@ class Track:
 
         Returns:
             tuple[np.ndarray, np.ndarray]: Angular velocity and acceleration Jacobian matricies respectively
-        """        
+        """
         # Compute rotation matrix from body to world
         state = self.state(np.array([s]))[0]
-        state_ds = self.state(np.array([s]), der=1)[0]
-        
+        state_ds = self.der_state(np.array([s]), n=1)[0]
+
         R = pin.rpy.rpyToMatrix(*state[3:6][::-1])  # We store in zyx (yaw, pitch, roll)
 
         # Calculates v (track velocity) and a (track accel)
@@ -283,9 +279,7 @@ class Track:
 
         return b_l, b_r
 
-    def tau_to_t(
-        self, tau: float | np.ndarray, k: float | np.ndarray
-    ) -> float | np.ndarray:
+    def tau_to_t(self, tau: float | np.ndarray, k: float | np.ndarray) -> float | np.ndarray:
         """
         Converts tau (interval parameter) to arc length
 
@@ -301,9 +295,7 @@ class Track:
 
         return norm_factor * tau + shift
 
-    def t_to_tau(
-        self, t: float | np.ndarray
-    ) -> tuple[float | np.ndarray, int | np.ndarray]:
+    def t_to_tau(self, t: float | np.ndarray) -> tuple[float | np.ndarray, int | np.ndarray]:
         """
         Converts arc length parameter to tau (interval parameter), can be used with either a numeric value or an
         array of numeric values
@@ -349,7 +341,5 @@ class Track:
             data = json.load(f)
 
         return Track(
-            [np.array(q) for q in data["q"]],
-            [np.array(x) for x in data["x"]],
-            np.array(data["t"])
+            [np.array(q) for q in data["q"]], [np.array(x) for x in data["x"]], np.array(data["t"])
         )

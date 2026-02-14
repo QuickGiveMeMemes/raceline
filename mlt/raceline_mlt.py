@@ -17,10 +17,11 @@ class MLTCollocation(PSCollocation):
         super().__init__()
         self.config = config
         self.track = Track.load(config["track"])
-        self.vehicle = Vehicle(config["vehicle_properties"], self.track, self.opti)
+        
 
     def iteration(self, t: np.ndarray, N: np.ndarray):
         self.opti = ca.Opti()
+        self.vehicle = Vehicle(self.config["vehicle_properties"], self.track, self.opti)
 
         K = len(N)
 
@@ -28,6 +29,8 @@ class MLTCollocation(PSCollocation):
 
         # Q, dQ, ddQ are (N_k + 2) x (n_q).
         Q = []  # Array containing Q matrices. q_j = [theta, mu, phi, n_l, n_r].
+        dQ = []
+        ddQ = []
         Q_dot = []
         Q_ddot = []
 
@@ -49,7 +52,7 @@ class MLTCollocation(PSCollocation):
                 # Explicitly couples last of previous segment with first of current segment
                 # by setting them as the same variable
                 Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
-                Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 2, 1)))
+                Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
 
             # Generates discontinous CasADi variables at collocation points
             U.append(self.opti.variable(N[k] + 2, self.n_u))
@@ -66,12 +69,12 @@ class MLTCollocation(PSCollocation):
             t_tau = norm_factor * tau + t_tau_0  # Global time (t) at collocation points
 
             # Time derivative calculation
-            dQ = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k])
-            ddQ = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ)
+            dQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k]))
+            ddQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ[k]))
             Q_1_ddot = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k]
 
-            Q_dot.append(dQ * Q_1_dot[k])
-            Q_ddot.append(ddQ * Q_1_dot[k] ** 2 + dQ * Q_1_ddot)
+            Q_dot.append(dQ[k] * Q_1_dot[k])
+            Q_ddot.append(ddQ[k] * Q_1_dot[k] ** 2 + dQ[k] * Q_1_ddot)
 
             # Continuity constraints
             if k != 0:
@@ -79,41 +82,44 @@ class MLTCollocation(PSCollocation):
                 self.opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
 
             # Collocation constraints (enforces dynamics on X)
-            for i, q_1 in enumerate(t_tau):
+            for i, q_1 in enumerate(t_tau[1:-1]):
                 self.vehicle.set_constraints(
                     q_1,
-                    Q_1_dot[k][i, :],
-                    Q_1_ddot[k][i, :],
-                    Q[k][i, :],
-                    Q_dot[k][i, :],
-                    Q_ddot[k][i, :],
-                    Z[k],
-                    U[k],
+                    Q_1_dot[k][i + 1, :],
+                    Q_1_ddot[i + 1, :],
+                    Q_dot[k][i + 1, :],
+                    Q_ddot[k][i + 1, :],
+                    Q[k][i + 1, :],
+                    Z[k][i + 1, :],
+                    U[k][i + 1, :],
                 )
 
             # Quadrature enforcement
             for j in range(N[k]):
-                lagrange_term = MLTCollocation.cost(Q_1_dot[j + 1], U[j + 1], U[j])
+                lagrange_term = MLTCollocation.cost(Q_1_dot[k][j + 1, :], U[k][j + 1, :], U[k][j, :])
                 J += norm_factor * w[j] * lagrange_term
 
             # Initial guess
             self.opti.set_initial(Q_1_dot[k], 1 / self.track.length)
 
             # self.opti.set_initial(Q[k])
+            self.opti.set_initial(Z[k], (self.vehicle.prop.m_sprung + self.vehicle.prop.m_unsprung) * 9.81 / 4)
+            self.opti.set_initial(U[k][0], 100)
 
         self.opti.minimize(J)
 
         ipopt_settings = {
-            "ipopt.print_frequency_iter": 50,
+            # "ipopt.print_frequency_iter": 50,
             "print_time": 0,
             "ipopt.sb": "no",
-            "ipopt.max_iter": 1000,
+            # "ipopt.max_iter": 1000,
             "detect_simple_bounds": True,
-            "ipopt.mu_strategy": "adaptive",
-            "ipopt.nlp_scaling_method": "gradient-based",
-            "ipopt.bound_relax_factor": 0,
-            "ipopt.hessian_approximation": "exact",
-            "ipopt.derivative_test": "none",
+            "ipopt.linear_solver": "ma97"
+            # "ipopt.mu_strategy": "adaptive",
+            # "ipopt.nlp_scaling_method": "gradient-based",
+            # "ipopt.bound_relax_factor": 0,
+            # # "ipopt.hessian_approximation": "exact",
+            # "ipopt.derivative_test": "none",
         }
         try:
             self.opti.solver("ipopt", ipopt_settings)
@@ -142,7 +148,7 @@ class MLTCollocation(PSCollocation):
 
     @staticmethod
     def cost(q_1_dot, u, prev_u, k_delta=1e-4, k_f=1e-4):
-        return 1 / q_1_dot + k_delta * (u[2] - prev_u[2]) + k_f * (u[0] * u[1])
+        return 1 / q_1_dot + k_f * (u[0] * u[1]) # + k_delta * (u[2] - prev_u[2]) 
 
 
 config = {
@@ -168,4 +174,4 @@ r_config = {
 # mr.run()
 
 foo = MLTCollocation(config)
-foo.iteration(np.linspace(0, 1, 10), np.array([5] * 9))
+foo.iteration(np.linspace(0, 1, 100), np.array([4] * 99))

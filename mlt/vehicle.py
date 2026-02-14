@@ -64,10 +64,10 @@ class VehicleProperties:
         return VehicleProperties(**all_things)
 
     def p_phi_1(self, p):
-        return (p[0][0] + p[0][1]) / 4 * self.g_t[0] ** 2 + self.p_karb[0]
+        return (p[0][0] + p[0][1]) / 4 * self.g_t[0] ** 2
 
     def p_phi_2(self, p):
-        return (p[1][0] + p[1][1]) / 4 * self.g_t[1] ** 2 + self.p_karb[1]
+        return (p[1][0] + p[1][1]) / 4 * self.g_t[1] ** 2
 
     def p_phi(self, p):
         return self.p_phi_1(p) + self.p_phi_2(p)
@@ -115,9 +115,22 @@ class Vehicle:
         # Initializes CasADi functions
         self._init_w3_func()
         self._init_w6_func()
+        self._init_fz_func()
+
+        u = ca.SX.sym("u", 3)
+        v = ca.SX.sym("v", 3)
+        self.cross = ca.Function(
+            "cross",
+            [u, v],
+            [
+                ca.vertcat(
+                    u[1] * v[0] - u[0] * v[1], u[2] * v[1] - u[1] * v[2], u[0] * v[1] - u[1] * v[0]
+                )
+            ],
+        )
 
     @staticmethod
-    def _list_to_SX(l: list):
+    def _2d_list_to_SX(l: list):
         return ca.vertcat(*[ca.horzcat(*row) for row in l])
 
     def _init_pin_tree(self):
@@ -229,14 +242,14 @@ class Vehicle:
         alpha = ca.Function("alpha", [v_3, u], [alpha_out])(v_3, u)
 
         # Pacejka lateral force (f_ijy)
-        f_y_out = Vehicle._list_to_SX(
+        f_y_out = Vehicle._2d_list_to_SX(
             [[self.pacejka[i](alpha[i], f_z[i, j]) for j in range(2)] for i in range(2)]
         )
         self.f_y_func = ca.Function("f_y", [f_z, u, v_3], [f_y_out])
         f_y = self.f_y_func(f_z, u, v_3)
 
         # Longitudinal wheel force (f_ijx)
-        f_x_out = Vehicle._list_to_SX(
+        f_x_out = Vehicle._2d_list_to_SX(
             [
                 [f_xb * self.prop.p_kb / 2] * 2,
                 [(f_xb * (1 - self.prop.p_kb) + f_xa) / 2] * 2,
@@ -284,66 +297,63 @@ class Vehicle:
         m_ya = ca.SX.sym("m_ya")
 
         # f_xa, f_xb, delta = ca.vertsplit(u)
-        v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
-        f_1z, f_2z = ca.vertsplit(f_z)
+        # v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
+        # f_1z, f_2z = ca.vertsplit(f_z)
         # f_11z, f_12z = ca.horzsplit(f_1z)
         # f_21z, f_22z = ca.horzsplit(f_2z)
+        v_3x = v_3[0]
 
         # Aerodynamic downforce (f_za)
-        f_za_out = Vehicle._list_to_SX(
-            [(self.env.rho * self.prop.a_Cz[i] * self.prop.g_S * v_3x**2) / 4 for i in range(2)]
+        f_za_out = ca.vertcat(
+            *[(self.env.rho * self.prop.a_Cz[i] * self.prop.g_S * v_3x**2) / 4 for i in range(2)]
         )
         f_za = ca.Function("f_za", [v_3], [f_za_out])(v_3)
 
         # Static load (f_z0)
         l = sum(self.prop.g_a)
-        f_z0_out = Vehicle._list_to_SX(
-            [(f_3z - sum(f_za)) * ca.vertcat(*[(l - self.prop.g_a[i]) / (2 * l) for i in range(2)])]
+        f_z0_out = ca.vertcat(
+            *[
+                (f_3z - (f_za[0] + f_za[1]))
+                * ca.vertcat(*[(l - self.prop.g_a[i]) / (2 * l) for i in range(2)])
+            ]
         )
-        f_z0 = ca.Function("f_z0", [v_3, f_za, f_3z], [f_z0_out])(v_3, f_za, f_3z)
+        f_z0 = ca.Function("f_z0", [v_3, f_3z], [f_z0_out])(v_3, f_3z)
 
         # Longitudinal shift (delta_f_z)
-        delta_f_z = ca.Function("delta_f_z", [m_3y], [-(m_3y - m_ya) / (2 * l)])(m_3y)
+        delta_f_z = ca.Function("delta_f_z", [m_3y, m_ya], [-(m_3y - m_ya) / (2 * l)])(m_3y, m_ya)
 
         # Lateral load transfer (lateral_delta_f_z)
         Y = [self.Y1_func(f_z, u, v_3), self.Y2_func(f_z, u, v_3)]  # Lateral force on axles
         k_phi = [
-            self.prop.p_phi_1(self.prop.s_k),
-            self.prop.p_phi_2(self.prop.s_k),
+            self.prop.p_phi_1(self.prop.s_k) + self.prop.p_karb[0],
+            self.prop.p_phi_2(self.prop.s_k) + self.prop.p_karb[1],
         ]  # Roll stiffness
-        lateral_delta_f_z_out = [
-            (
-                k_phi[i]
-                / sum(k_phi)
-                * (-m_3x - (Y[0] * self.prop.g_hq[0] + Y[1] * self.prop.g_hq[1]))
-                + self.prop.g_hq[i] * Y[i]
-            )
-            / self.prop.g_t[i]
-            for i in range(2)
-        ]
+        lateral_delta_f_z_out = ca.vertcat(
+            *[
+                (
+                    k_phi[i]
+                    / sum(k_phi)
+                    * (-m_3x - (Y[0] * self.prop.g_hq[0] + Y[1] * self.prop.g_hq[1]))
+                    + self.prop.g_hq[i] * Y[i]
+                )
+                / self.prop.g_t[i]
+                for i in range(2)
+            ]
+        )
         lateral_delta_f_z = ca.Function(
-            "lateral_delta_f_z", [f_z, u, v_3, m_3x], lateral_delta_f_z_out
+            "lateral_delta_f_z", [f_z, u, v_3, m_3x], [lateral_delta_f_z_out]
         )(f_z, u, v_3, m_3x)
 
         # ========================= Calculate f_z (All vertical forces on tires) =========================
-        f_z_out = Vehicle._list_to_SX(
+        f_z_out = Vehicle._2d_list_to_SX(
             [
                 [f_z0[i] + f_za[i] + delta_f_z + (-1) ** j * lateral_delta_f_z[i] for j in range(2)]
                 for i in range(2)
             ]
         )
-        self.f_z_func = ca.Function("f_z", [f_z, u, v_3, f_za, f_3z, m_3x, m_3y, m_ya], f_z_out)
+        self.f_z_func = ca.Function("f_z", [f_z, u, v_3, f_3z, m_3x, m_3y, m_ya], [f_z_out])
 
-    def rnea(
-        self,
-        q_1: float,
-        q_1_dot: ca.SX,
-        q_1_ddot: ca.SX,
-        q: ca.SX,
-        q_dot: ca.SX,
-        q_ddot: ca.SX,
-        f_ext: list[cpin.Force],
-    ) -> tuple[np.ndarray, tuple[float, float, float]]:
+    def _rnea_func(self, q_1):
         """
         Performs RNEA
 
@@ -360,8 +370,27 @@ class Vehicle:
             tuple[np.ndarray, tuple[float, float, float]]: Torques (τ1, ..., τ6) and structural wrench components (f3z, m3x, m3y)
         """
 
-        # Calculates track vel, accel
-        # track_q = self.track.state(np.array([q_1]) * self.track.length)[0]
+        # q = ca.SX.sym("q", 12)
+        # v = ca.SX.sym("v", 11)
+        # a = ca.SX.sym("a", 11)
+        # f_ext = [].  q_1, q_1_dot, q_1_ddot, q_dot, q_ddot, q, f_z, u
+
+        # Dummy variable definitions
+        q_1_dot = ca.SX.sym("q_1_dot")
+        q_1_ddot = ca.SX.sym("q_1_ddot")
+
+        q_in = ca.SX.sym("q", 5)
+        q_dot = ca.SX.sym("q_dot", 5)
+        q_ddot = ca.SX.sym("q_ddot", 5)
+
+        f_z = ca.SX.sym("f_z", 2, 2)
+        u = ca.SX.sym("u", 3)
+
+        # Calculating freeflyer config
+        se3 = self.track.se3_state(q_1 * self.track.length)
+        R = se3.rotation
+        q = ca.vertcat(cpin.SE3ToXYZQUAT(se3), q_in)
+
         track_v_spatial = self.track.der_state(np.array([q_1]) * self.track.length, n=1)[0]
         track_a_spatial = self.track.der_state(np.array([q_1]) * self.track.length, n=2)[0]
 
@@ -372,11 +401,6 @@ class Vehicle:
             + track_v_spatial * self.track.length * q_1_ddot
         )
 
-        se3 = self.track.se3_state(q_1 * self.track.length)
-
-        R = se3.rotation
-        q = np.hstack([cpin.utils.SE3ToXYZQUAT(se3), q])
-
         J_e, J_e_dot = self.track.rotation_jacobians(q_1 * self.track.length)
 
         # Compute ω and concatenate with spacial velocities and given joint velocities
@@ -384,89 +408,19 @@ class Vehicle:
         body_linear_v = R.T @ track_v[:3]
         body_angular_v = R.T @ J_e @ track_v[3:6]
 
-        v = np.hstack([body_linear_v, body_angular_v, q_dot])
+        v = ca.vertcat(body_linear_v, body_angular_v, q_dot)
 
         # Compute dω and concatentate with accelerations and given joint accelerations
         # Rotate from world to body
-        a = np.hstack(
-            [
-                R.T @ track_a[:3] - np.cross(body_angular_v, body_linear_v),
-                R.T @ (J_e @ track_a[3:6] + J_e_dot @ track_v[3:6]) * q_1_dot,
-                q_ddot,
-            ]
+        a = ca.vertcat(
+            R.T @ track_a[:3] - self.cross(body_angular_v, body_linear_v),
+            R.T @ (J_e @ track_a[3:6] + J_e_dot @ track_v[3:6]) * q_1_dot,
+            q_ddot,
         )
 
+        cpin.forwardKinematics(self.cmodel, self.cdata, q, v)
 
-def _init_rnea_func():
-        q = ca.SX.sym("q", 12)
-        v = ca.SX.sym("v", 11)
-        a = ca.SX.sym("a", 11)
-        f_ext = []
-
-
-        torques = cpin.rnea(self.model, self.cdata, q, v, a, f_ext)
-
-        # TODO check these indicies!
-        return (
-            torques,
-            self.data.v[3],
-            (
-                self.data.f[3].linear[3],
-                self.data.f[3].angular[0],
-                self.data.f[3].angular[1],
-            ),
-        )
-
-    # @staticmethod
-    # def mx_to_sx(mx):
-    #     dummy = ca.SX(*mx.size())
-    #     return ca.Function("func", [dummy], [dummy]).expand()(mx)
-
-    # @staticmethod
-    # def require_sx(func):
-    #     def thing(*args, **kwargs):
-    #         args = list(args)
-
-    #         for i in range(len(args)):
-    #             if type(args[i]) == ca.casadi.MX:
-    #                 print("owfeihpoiawefhoiwa")
-    #                 args[i] = Vehicle.mx_to_sx(args[i])
-    #                 print(type(args[i]))
-    #         for i in kwargs:
-    #             if type(args[i]) == ca.casadi.MX:
-    #                 kwargs[i] = Vehicle.mx_to_sx(kwargs[i])
-    #         return func(*args, **kwargs)
-
-    #     return thing
-
-    # @require_sx
-    def set_constraints(self, q_1, q_1_dot, q_1_ddot, q_dot, q_ddot, q, f_z, u):
-        q_1_dot_dummy = ca.SX(*q_1_dot.size())
-        q_dot_dummy = ca.SX(*q_dot.size())
-        q_dummy = ca.SX(*q.size())
-
-        print(q_1_dot_dummy.T.size())
-        print(q_dot_dummy.T.size())
-
-        ca.Function(
-            "fwddyn",
-            [q_1_dot_dummy, q_dot_dummy, q_dummy],
-            [
-                cpin.forwardKinematics(
-                    self.cmodel,
-                    self.cdata,
-                    ca.vertcat(
-                        cpin.SE3ToXYZQUAT(
-                            self.track.se3_state(np.array([q_1 * self.track.length]))
-                        ),
-                        q_dummy.T,
-                    ),
-                    ca.vertcat(q_1_dot_dummy.T, q_dot_dummy.T),
-                )
-            ],
-        )(q_1_dot, q_dot, q)
-
-        v_3 = self.data.v[self.road_lat_id][:3]
+        v_3 = self.cdata.v[self.road_lat_id].vector
 
         f_ext = [cpin.Force.Zero() for _ in range(self.model.njoints)]
 
@@ -474,21 +428,39 @@ def _init_rnea_func():
         f_xa, f_za, m_ya = ca.vertsplit(self.w6_func(v_3))
 
         # TODO Check these indicies
-        f_ext[3] = cpin.Force(np.array([f_3x, f_3y, 0]), np.array([0, 0, m_3z]))
-        f_ext[6] = cpin.Force(np.array([f_xa, 0, f_za]), np.array([0, m_ya, 0]))
+        f_ext[3] = cpin.Force(ca.vertcat(f_3x, f_3y, 0), ca.vertcat(0, 0, m_3z))
+        f_ext[6] = cpin.Force(ca.vertcat(f_xa, 0, f_za), ca.vertcat(0, m_ya, 0))
 
-        torques, v_3, (f_3z, m_3x, m_3y) = self.rnea(
-            q_1, q_1_dot, q_1_ddot, q, q_dot, q_ddot, f_ext
+        torques = cpin.rnea(self.cmodel, self.cdata, q, v, a, f_ext)
+
+        # TODO check these indicies!
+        print(self.cdata.f[3].linear.size())
+        return ca.Function(
+            "rnea",
+            [q_1_dot, q_1_ddot, q_in, q_dot, q_ddot, f_z, u],
+            [
+                torques,
+                self.cdata.v[3].vector,
+                self.cdata.f[3].linear[2],
+                self.cdata.f[3].angular[0],
+                self.cdata.f[3].angular[1],
+            ],
         )
-        v_3x, v_3y, v_3z = ca.vertsplit(v_3)
 
-        self.opti.subject_to(self.f_z_func(f_z, u, v_3, f_za, f_3z, m_3x, m_3y, m_ya) == f_z)
+    def set_constraints(self, q_1, q_1_dot, q_1_ddot, q_dot, q_ddot, q, f_z, u):
+        f_z = f_z.reshape((2, 2))
+
+        torques, v_3, f_3z, m_3x, m_3y = self._rnea_func(q_1)(
+            q_1_dot, q_1_ddot, q, q_dot, q_ddot, f_z, u
+        )
+
+        v_3x = ca.vertsplit(v_3)[0]
+
+        m_ya = self.w6_func(v_3)[-1]
+        self.opti.subject_to(self.f_z_func(f_z, u, v_3, f_3z, m_3x, m_3y, m_ya) == f_z)
 
         self.opti.subject_to(torques[6] == 0)  # road_lat
         self.opti.subject_to(torques[7] == 0)  # yaw
-
-        k = self.prop.p(self.prop.s_k) + self.prop.p_karb
-        c = self.prop.p(self.prop.s_c)
 
         # Vert
         self.opti.subject_to(
@@ -505,8 +477,12 @@ def _init_rnea_func():
         # Roll
         self.opti.subject_to(
             torques[10]
-            == -self.prop.p_phi(self.prop.s_k) * q[4] - self.prop.p_phi(self.prop.s_c) * q_dot[4]
+            == -(self.prop.p_phi(self.prop.s_k) + sum(self.prop.p_karb)) * q[4]
+            - self.prop.p_phi(self.prop.s_c) * q_dot[4]
         )
+
+        # Positive velocity
+        self.opti.subject_to(q_1_dot > 0)
 
         # Power limit
         self.opti.subject_to(u[0] * v_3x <= self.prop.e_max)
@@ -517,8 +493,8 @@ def _init_rnea_func():
         self.opti.subject_to(self.opti.bounded(-self.prop.g_steer_max, u[2], self.prop.g_steer_max))
 
         # Track bounds
-        n_l, n_r = self.track.state(np.array([q_1 * self.track.length]))[-2:]
-        self.opti.subject_to(self.opti.bounded(-n_r, q[0], n_l))
+        n_l, n_r = self.track.state(np.array([q_1 * self.track.length]))[0][-2:]
+        self.opti.subject_to(self.opti.bounded(n_r, q[0], n_l))
 
         f_x = ca.vertcat(
             ca.horzcat(*(2 * [u[1] * self.prop.p_kb / 2])),
