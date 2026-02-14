@@ -3,7 +3,8 @@ import scipy.interpolate
 import plotly.graph_objects as go
 import json
 import pinocchio as pin
-
+import pinocchio.casadi as cpin
+import casadi as ca
 
 class Track:
 
@@ -82,10 +83,10 @@ class Track:
         Returns:
             pin.SE3: Generated SE3
         """        
-        q = self.state(s)
-        rot = pin.rpy.rpyToMatrix(q[3:6][::-1])
+        q = self.state(s)[0]
+        rot = cpin.rpy.rpyToMatrix(*q[3:6][::-1])
 
-        return pin.SE3(rot, q[:3])
+        return cpin.SE3(rot, ca.SX(q[:3]))
 
 
     def rotation_jacobians(self, s: float) -> tuple[np.ndarray, np.ndarray]:

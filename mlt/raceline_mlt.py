@@ -1,8 +1,8 @@
 import pinocchio as pin
+
 import numpy as np
 from track_import.track import Track
-from typing import override
-from vehicle import Vehicle
+from mlt.vehicle import Vehicle
 from mesh_refinement.collocation import PSCollocation
 import casadi as ca
 
@@ -19,8 +19,9 @@ class MLTCollocation(PSCollocation):
         self.track = Track.load(config["track"])
         self.vehicle = Vehicle(config["vehicle_properties"], self.track, self.opti)
 
-    @override
     def iteration(self, t: np.ndarray, N: np.ndarray):
+        self.opti = ca.Opti()
+
         K = len(N)
 
         Q_1_dot = []
@@ -78,15 +79,93 @@ class MLTCollocation(PSCollocation):
                 self.opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
 
             # Collocation constraints (enforces dynamics on X)
-            self.vehicle.set_constraints(
-                t_tau, Q_1_dot[k], Q_1_ddot[k], Q[k], dQ[k], ddQ[k], Z[k], U[k]
-            )
+            for i, q_1 in enumerate(t_tau):
+                self.vehicle.set_constraints(
+                    q_1,
+                    Q_1_dot[k][i, :],
+                    Q_1_ddot[k][i, :],
+                    Q[k][i, :],
+                    Q_dot[k][i, :],
+                    Q_ddot[k][i, :],
+                    Z[k],
+                    U[k],
+                )
 
             # Quadrature enforcement
             for j in range(N[k]):
                 lagrange_term = MLTCollocation.cost(Q_1_dot[j + 1], U[j + 1], U[j])
                 J += norm_factor * w[j] * lagrange_term
 
+            # Initial guess
+            self.opti.set_initial(Q_1_dot[k], 1 / self.track.length)
+
+            # self.opti.set_initial(Q[k])
+
+        self.opti.minimize(J)
+
+        ipopt_settings = {
+            "ipopt.print_frequency_iter": 50,
+            "print_time": 0,
+            "ipopt.sb": "no",
+            "ipopt.max_iter": 1000,
+            "detect_simple_bounds": True,
+            "ipopt.mu_strategy": "adaptive",
+            "ipopt.nlp_scaling_method": "gradient-based",
+            "ipopt.bound_relax_factor": 0,
+            "ipopt.hessian_approximation": "exact",
+            "ipopt.derivative_test": "none",
+        }
+        try:
+            self.opti.solver("ipopt", ipopt_settings)
+        except Exception as e:
+            if "ipopt.linear_solver" in ipopt_settings:
+                print(
+                    f"Could not use solver {ipopt_settings['ipopt.linear_solver']}, using default!"
+                )
+                ipopt_settings["ipopt.linear_solver"] = "mumps"
+                self.opti.solver("ipopt", ipopt_settings)
+
+            else:
+                raise e
+
+        print(f"Solving with {self.opti.nx} variables.")
+        try:
+            sol = self.opti.solve()
+            stats = sol.stats()
+            print(f"Solve iteration succeeded in {stats['iter_count']} iterations")
+        except:
+            sol = self.opti.debug
+            stats = sol.stats()
+            print(f"Solve iteration failed after {stats['iter_count']} iteration...")
+
+        print(f"Final cost: {sol.value(J)}")
+
     @staticmethod
     def cost(q_1_dot, u, prev_u, k_delta=1e-4, k_f=1e-4):
         return 1 / q_1_dot + k_delta * (u[2] - prev_u[2]) + k_f * (u[0] * u[1])
+
+
+config = {
+    "track": "track_import/generated/monza.json",
+    "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
+}
+r_config = {
+    "initial_collocation": 8,  # Number of collocation points per segment initially
+    "initial_mesh_points": 15,  # Number of mesh points initially
+    "refinement_steps": 8,  # Number of refinement steps to perform
+    # Lower level parameters relating to the mesh refinement process
+    "config": {
+        "sampling_resolution": 0.5,  # Cost function sampling resolution
+        "variation_threshold": 0.5,  # Threshold of variation to choose between h and p refinement
+        "h_divisions": 2,  # Number of mesh points added when h-refining a segment
+        "h_min_collocation": 4,  # Number of initial collocation points per new segment
+        "p_degree_increase": 5,  # Degree added when p-refining a segment
+    },
+}
+
+# mr = MeshRefinement(MLTCollocation(config), r_config)
+
+# mr.run()
+
+foo = MLTCollocation(config)
+foo.iteration(np.linspace(0, 1, 10), np.array([5] * 9))

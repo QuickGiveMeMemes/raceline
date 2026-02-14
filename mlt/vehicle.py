@@ -116,6 +116,10 @@ class Vehicle:
         self._init_w3_func()
         self._init_w6_func()
 
+    @staticmethod
+    def _list_to_SX(l: list):
+        return ca.vertcat(*[ca.horzcat(*row) for row in l])
+
     def _init_pin_tree(self):
         """
         Initializes the pinocchio vehicle model
@@ -217,7 +221,7 @@ class Vehicle:
         f_xa, f_xb, delta = ca.vertsplit(u)
         v_3x, v_3y, _, _, _, omega_3z = ca.vertsplit(v_3)
 
-        # Tyre slip (alpha)
+        # Wheel slip (alpha)
         alpha_out = ca.vertcat(
             delta - (v_3y + omega_3z * self.prop.g_a[0]) / v_3x,
             -(v_3y - omega_3z * self.prop.g_a[1]) / v_3x,
@@ -225,14 +229,14 @@ class Vehicle:
         alpha = ca.Function("alpha", [v_3, u], [alpha_out])(v_3, u)
 
         # Pacejka lateral force (f_ijy)
-        f_y_out = ca.SX(
+        f_y_out = Vehicle._list_to_SX(
             [[self.pacejka[i](alpha[i], f_z[i, j]) for j in range(2)] for i in range(2)]
         )
         self.f_y_func = ca.Function("f_y", [f_z, u, v_3], [f_y_out])
         f_y = self.f_y_func(f_z, u, v_3)
 
-        # Longitudinal tyre force (f_ijx)
-        f_x_out = ca.SX(
+        # Longitudinal wheel force (f_ijx)
+        f_x_out = Vehicle._list_to_SX(
             [
                 [f_xb * self.prop.p_kb / 2] * 2,
                 [(f_xb * (1 - self.prop.p_kb) + f_xa) / 2] * 2,
@@ -286,14 +290,14 @@ class Vehicle:
         # f_21z, f_22z = ca.horzsplit(f_2z)
 
         # Aerodynamic downforce (f_za)
-        f_za_out = ca.SX(
+        f_za_out = Vehicle._list_to_SX(
             [(self.env.rho * self.prop.a_Cz[i] * self.prop.g_S * v_3x**2) / 4 for i in range(2)]
         )
         f_za = ca.Function("f_za", [v_3], [f_za_out])(v_3)
 
         # Static load (f_z0)
         l = sum(self.prop.g_a)
-        f_z0_out = ca.SX(
+        f_z0_out = Vehicle._list_to_SX(
             [(f_3z - sum(f_za)) * ca.vertcat(*[(l - self.prop.g_a[i]) / (2 * l) for i in range(2)])]
         )
         f_z0 = ca.Function("f_z0", [v_3, f_za, f_3z], [f_z0_out])(v_3, f_za, f_3z)
@@ -322,7 +326,7 @@ class Vehicle:
         )(f_z, u, v_3, m_3x)
 
         # ========================= Calculate f_z (All vertical forces on tires) =========================
-        f_z_out = ca.SX(
+        f_z_out = Vehicle._list_to_SX(
             [
                 [f_z0[i] + f_za[i] + delta_f_z + (-1) ** j * lateral_delta_f_z[i] for j in range(2)]
                 for i in range(2)
@@ -392,6 +396,14 @@ class Vehicle:
             ]
         )
 
+
+def _init_rnea_func():
+        q = ca.SX.sym("q", 12)
+        v = ca.SX.sym("v", 11)
+        a = ca.SX.sym("a", 11)
+        f_ext = []
+
+
         torques = cpin.rnea(self.model, self.cdata, q, v, a, f_ext)
 
         # TODO check these indicies!
@@ -405,13 +417,54 @@ class Vehicle:
             ),
         )
 
+    # @staticmethod
+    # def mx_to_sx(mx):
+    #     dummy = ca.SX(*mx.size())
+    #     return ca.Function("func", [dummy], [dummy]).expand()(mx)
+
+    # @staticmethod
+    # def require_sx(func):
+    #     def thing(*args, **kwargs):
+    #         args = list(args)
+
+    #         for i in range(len(args)):
+    #             if type(args[i]) == ca.casadi.MX:
+    #                 print("owfeihpoiawefhoiwa")
+    #                 args[i] = Vehicle.mx_to_sx(args[i])
+    #                 print(type(args[i]))
+    #         for i in kwargs:
+    #             if type(args[i]) == ca.casadi.MX:
+    #                 kwargs[i] = Vehicle.mx_to_sx(kwargs[i])
+    #         return func(*args, **kwargs)
+
+    #     return thing
+
+    # @require_sx
     def set_constraints(self, q_1, q_1_dot, q_1_ddot, q_dot, q_ddot, q, f_z, u):
-        cpin.forwardKinematics(
-            self.model,
-            self.data,
-            ca.vertcat([cpin.utils.SE3ToXYZQUAT(self.track.se3_state(q_1 * self.track.length)), q]),
-            ca.vertcat([q_1_dot, q_dot]),
-        )
+        q_1_dot_dummy = ca.SX(*q_1_dot.size())
+        q_dot_dummy = ca.SX(*q_dot.size())
+        q_dummy = ca.SX(*q.size())
+
+        print(q_1_dot_dummy.T.size())
+        print(q_dot_dummy.T.size())
+
+        ca.Function(
+            "fwddyn",
+            [q_1_dot_dummy, q_dot_dummy, q_dummy],
+            [
+                cpin.forwardKinematics(
+                    self.cmodel,
+                    self.cdata,
+                    ca.vertcat(
+                        cpin.SE3ToXYZQUAT(
+                            self.track.se3_state(np.array([q_1 * self.track.length]))
+                        ),
+                        q_dummy.T,
+                    ),
+                    ca.vertcat(q_1_dot_dummy.T, q_dot_dummy.T),
+                )
+            ],
+        )(q_1_dot, q_dot, q)
 
         v_3 = self.data.v[self.road_lat_id][:3]
 
