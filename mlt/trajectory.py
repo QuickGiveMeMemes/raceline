@@ -5,6 +5,7 @@ import json
 import pinocchio as pin
 import pinocchio.casadi as cpin
 import casadi as ca
+import plotly.express as px
 
 
 class Trajectory:
@@ -26,7 +27,7 @@ class Trajectory:
         self.Q = Q  # q
         self.v = v
         self.U = U  # fxa fxb delta
-        self.t = t
+        self.t = t * track_length
         self.length = track_length
 
         # [x, y, z, theta, mu, phi, n_l, n_r]
@@ -112,6 +113,10 @@ class Trajectory:
         s = np.linspace(0, self.length, int(self.length // approx_spacing))
         points = self(s)
 
+        px.scatter(x=s, y=points[:, 0]).show()
+        px.scatter(x=s, y=points[:, 1]).show()
+        px.scatter(x=s, y=points[:, 2]).show()
+        
         return go.Scatter3d(
             x=points[:, 0],
             y=points[:, 1],

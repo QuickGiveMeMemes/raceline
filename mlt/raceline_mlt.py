@@ -7,6 +7,8 @@ from mesh_refinement.collocation import PSCollocation
 import casadi as ca
 from mlt.trajectory import Trajectory
 import plotly.graph_objects as go
+import plotly.express as px
+
 
 
 class MLTCollocation(PSCollocation):
@@ -104,6 +106,7 @@ class MLTCollocation(PSCollocation):
 
             # Initial guess
             self.opti.set_initial(Q_1_dot[k], 1 / self.track.length)
+            self.opti.set_initial(Z[k], ca.DM([[self.vehicle.prop.m_sprung * 9.81] * 4] * (N[k] + 2)))
 
             # self.opti.set_initial(Q[k])
             self.opti.set_initial(
@@ -117,14 +120,14 @@ class MLTCollocation(PSCollocation):
             # "ipopt.print_frequency_iter": 50,
             "print_time": 0,
             "ipopt.sb": "no",
-            # "ipopt.max_iter": 1000,
+            "ipopt.max_iter": 1000,
             "detect_simple_bounds": True,
             "ipopt.linear_solver": "ma97",
-            # "ipopt.mu_strategy": "adaptive",
-            # "ipopt.nlp_scaling_method": "gradient-based",
-            # "ipopt.bound_relax_factor": 0,
-            # # "ipopt.hessian_approximation": "exact",
-            # "ipopt.derivative_test": "none",
+            "ipopt.mu_strategy": "adaptive",
+            "ipopt.nlp_scaling_method": "gradient-based",
+            "ipopt.bound_relax_factor": 0,
+            "ipopt.hessian_approximation": "exact",
+            "ipopt.derivative_test": "none",
         }
         try:
             self.opti.solver("ipopt", ipopt_settings)
@@ -163,8 +166,10 @@ class MLTCollocation(PSCollocation):
         fig = go.Figure()
 
         fig.add_traces([x, xx])
-        fig.update_layout(scene=dict(aspectmode="data"))
+        # fig.update_layout(scene=dict(aspectmode="data"))
         fig.show()
+
+        self.track.plot_raceline(ttt)
 
     @staticmethod
     def cost(q_1_dot, u, prev_u, k_delta=1e-4, k_f=1e-4):

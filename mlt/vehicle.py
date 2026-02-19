@@ -119,15 +119,15 @@ class Vehicle:
 
         u = ca.SX.sym("u", 3)
         v = ca.SX.sym("v", 3)
-        self.cross = ca.Function(
-            "cross",
-            [u, v],
-            [
-                ca.vertcat(
-                    u[1] * v[0] - u[0] * v[1], u[2] * v[1] - u[1] * v[2], u[0] * v[1] - u[1] * v[0]
-                )
-            ],
-        )
+        # self.cross = ca.Function(
+        #     "cross",
+        #     [u, v],
+        #     [
+        #         ca.vertcat(
+        #             u[1] * v[0] - u[0] * v[1], u[2] * v[1] - u[1] * v[2], u[0] * v[1] - u[1] * v[0]
+        #         )
+        #     ],
+        # )
 
     @staticmethod
     def _2d_list_to_SX(l: list):
@@ -200,7 +200,7 @@ class Vehicle:
             self.sprung,
             pin.SE3(np.eye(3), np.array([0, 0, self.prop.g_com_h])),
         )
-        print("test", self.road_lat_id)
+        # print("test", self.road_lat_id)
 
     def _init_w6_func(self):
         """
@@ -251,8 +251,8 @@ class Vehicle:
         # Longitudinal wheel force (f_ijx)
         f_x_out = Vehicle._2d_list_to_SX(
             [
-                [f_xb * self.prop.p_kb / 2] * 2,
-                [(f_xb * (1 - self.prop.p_kb) + f_xa) / 2] * 2,
+                [-f_xb * self.prop.p_kb / 2] * 2,
+                [(-f_xb * (1 - self.prop.p_kb) + f_xa) / 2] * 2,
             ]
         )
         f_x = ca.Function("f_x", [u], [f_x_out])(u)
@@ -395,7 +395,7 @@ class Vehicle:
         track_a_spatial = self.track.der_state(np.array([q_1]) * self.track.length, n=2)[0]
 
         # Convert from [0, 1] normalized parameter to arc length to time derivative
-        track_v = track_v_spatial * q_1_dot
+        track_v = track_v_spatial * q_1_dot * self.track.length
         track_a = (
             track_a_spatial * self.track.length**2 * q_1_dot**2
             + track_v_spatial * self.track.length * q_1_ddot
@@ -413,16 +413,17 @@ class Vehicle:
         # Compute dω and concatentate with accelerations and given joint accelerations
         # Rotate from world to body
         a = ca.vertcat(
-            R.T @ track_a[:3] - self.cross(body_angular_v, body_linear_v),
-            R.T @ (J_e @ track_a[3:6] + J_e_dot @ track_v[3:6]) * q_1_dot,
+            R.T @ track_a[:3] - ca.cross(body_angular_v, body_linear_v),
+            R.T @ (J_e @ track_a[3:6] + J_e_dot @ track_v[3:6] * q_1_dot * self.track.length),      # TODO i think the chain rule is fixed
             q_ddot,
         )
 
         cpin.forwardKinematics(self.cmodel, self.cdata, q, v)
 
-        v_3 = self.cdata.v[self.road_lat_id].vector
+        v_3 = self.cdata.v[self.yaw_id].vector
 
         f_ext = [cpin.Force.Zero() for _ in range(self.model.njoints)]
+        # print("njoints", self.model.njoints)
 
         f_3x, f_3y, m_3z = ca.vertsplit(self.w3e_func(f_z, u, v_3))
         f_xa, f_za, m_ya = ca.vertsplit(self.w6_func(v_3))
@@ -433,14 +434,18 @@ class Vehicle:
 
         torques = cpin.rnea(self.cmodel, self.cdata, q, v, a, f_ext)
 
+        v_1 = ca.vertcat(body_linear_v, body_angular_v)
+        ff_torque = ca.dot(v_1, torques[:6])
+
         # TODO check these indicies!
-        print(self.cdata.f[3].linear.size())
+        # print(self.cdata.f[3].linear.size())
         return ca.Function(
             "rnea",
             [q_1_dot, q_1_ddot, q_in, q_dot, q_ddot, f_z, u],
             [
                 torques,
-                self.cdata.v[3].vector,
+                ff_torque,
+                v_3,
                 self.cdata.f[3].linear[2],
                 self.cdata.f[3].angular[0],
                 self.cdata.f[3].angular[1],
@@ -450,7 +455,7 @@ class Vehicle:
     def set_constraints(self, q_1, q_1_dot, q_1_ddot, q_dot, q_ddot, q, f_z, u):
         f_z = f_z.reshape((2, 2))
 
-        torques, v_3, f_3z, m_3x, m_3y = self._rnea_func(q_1)(
+        torques, ff_torque, v_3, f_3z, m_3x, m_3y = self._rnea_func(q_1)(
             q_1_dot, q_1_ddot, q, q_dot, q_ddot, f_z, u
         )
 
@@ -458,6 +463,9 @@ class Vehicle:
 
         m_ya = self.w6_func(v_3)[-1]
         self.opti.subject_to(self.f_z_func(f_z, u, v_3, f_3z, m_3x, m_3y, m_ya) == f_z)
+
+        # J_e, _ = self.track.rotation_jacobians(q_1 * self.track.length)
+        self.opti.subject_to(ff_torque == 0)       # TODO check math here and see if necessary
 
         self.opti.subject_to(torques[6] == 0)  # road_lat
         self.opti.subject_to(torques[7] == 0)  # yaw
@@ -497,8 +505,8 @@ class Vehicle:
         self.opti.subject_to(self.opti.bounded(n_r, q[0], n_l))
 
         f_x = ca.vertcat(
-            ca.horzcat(*(2 * [u[1] * self.prop.p_kb / 2])),
-            ca.horzcat(*(2 * [u[1] * (1 - self.prop.p_kb) + u[0]])) / 2,
+            ca.horzcat(*(2 * [-u[1] * self.prop.p_kb / 2])),
+            ca.horzcat(*(2 * [-u[1] * (1 - self.prop.p_kb) + u[0]])) / 2,
         )
         f_y = self.f_y_func(f_z, u, v_3)
 

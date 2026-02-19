@@ -5,6 +5,7 @@ import json
 import pinocchio as pin
 import pinocchio.casadi as cpin
 import casadi as ca
+from mlt.trajectory import Trajectory
 
 
 class Track:
@@ -278,8 +279,31 @@ class Track:
         b_r = x + n * n_r[:, np.newaxis]
 
         return b_l, b_r
-    
-    def raceline(self, state: np.ndarray) -> tuple[float, float]:
+
+    def plot_raceline(self, trajectory: Trajectory, approx_spacing=0.1):
+        s = np.linspace(0, self.length, int(self.length // approx_spacing))
+        ss = trajectory.state(s)
+        r = self.raceline(self.state(s), ss[:, 0])
+
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Scatter3d(
+                x=r[:, 0],
+                y=r[:, 1],
+                z=r[:, 2],
+                name="line",
+                mode="lines",
+                line=dict(color=ss[:, -1], colorscale="Viridis"),
+            )
+        )
+
+        fig.show()
+
+        fig.update_layout(scene=dict(aspectmode="data"))
+        fig.show()
+
+    def raceline(self, state: np.ndarray, n_l) -> tuple[float, float]:
         """
         Computes track boundaries
 
@@ -295,8 +319,6 @@ class Track:
         theta = state[:, 3]
         mu = state[:, 4]
         phi = state[:, 5]
-        n_l = state[:, 6]
-        n_r = state[:, 7]
 
         n = np.column_stack(
             [
@@ -307,9 +329,8 @@ class Track:
         )
 
         b_l = x + n * n_l[:, np.newaxis]
-        b_r = x + n * n_r[:, np.newaxis]
 
-        return b_l, b_r
+        return b_l
 
     def tau_to_t(self, tau: float | np.ndarray, k: float | np.ndarray) -> float | np.ndarray:
         """
