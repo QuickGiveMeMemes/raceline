@@ -313,7 +313,7 @@ class Vehicle:
         l = sum(self.prop.g_a)
         f_z0_out = ca.vertcat(
             *[
-                (f_3z - (f_za[0] + f_za[1]))
+                (f_3z - 2 * (f_za[0] + f_za[1]))
                 * ca.vertcat(*[(l - self.prop.g_a[i]) / (2 * l) for i in range(2)])
             ]
         )
@@ -513,12 +513,12 @@ class Vehicle:
         for i in range(2):
             for j in range(2):
                 mu_x = (
-                    self.prop.t_Dx1
-                    + self.prop.t_Dx2 * (f_z[i, j] - self.prop.t_Fznom) / self.prop.t_Fznom
+                    self.prop.t_Dx1[i]
+                    + self.prop.t_Dx2[i] * (f_z[i, j] - self.prop.t_Fznom[i]) / self.prop.t_Fznom[i]
                 )
                 mu_y = (
-                    self.prop.t_Dy1
-                    + self.prop.t_Dy2 * (f_z[i, j] - self.prop.t_Fznom) / self.prop.t_Fznom
+                    self.prop.t_Dy1[i]
+                    + self.prop.t_Dy2[i] * (f_z[i, j] - self.prop.t_Fznom[i]) / self.prop.t_Fznom[i]
                 )
 
                 self.opti.subject_to(
