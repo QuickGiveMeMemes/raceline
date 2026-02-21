@@ -50,20 +50,20 @@ class MLTCollocation(PSCollocation):
                 Q.append(self.opti.variable(N[k] + 2, self.n_q))
                 Q_1_dot.append(self.opti.variable(N[k] + 2, 1))
 
-                U.append(self.opti.variable(N[k] + 2, self.n_u))
-                Z.append(self.opti.variable(N[k] + 2, self.n_z))
+                # U.append(self.opti.variable(N[k] + 2, self.n_u))
+                # Z.append(self.opti.variable(N[k] + 2, self.n_z))
             else:
                 # Explicitly couples last of previous segment with first of current segment
                 # by setting them as the same variable
                 Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
                 Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
 
-                U.append(ca.vertcat(U[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_u)))
-                Z.append(ca.vertcat(Z[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_z)))
+                # U.append(ca.vertcat(U[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_u)))
+                # Z.append(ca.vertcat(Z[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_z)))
 
             # Generates discontinous CasADi variables at collocation points
-            # U.append(self.opti.variable(N[k] + 2, self.n_u))
-            # Z.append(self.opti.variable(N[k] + 2, self.n_z))
+            U.append(self.opti.variable(N[k] + 2, self.n_u))
+            Z.append(self.opti.variable(N[k] + 2, self.n_z))
 
             # Generation of LG collocation points
             tau, w = np.polynomial.legendre.leggauss(N[k])  # w is the quadrature weights
@@ -184,6 +184,7 @@ class MLTCollocation(PSCollocation):
         U_sol = [sol.value(seg) for seg in U]
         Q_sol = [sol.value(seg) for seg in Q]
         v_sol = [sol.value(seg) for seg in Q_1_dot]
+        all_t = np.array(all_t)
 
         traj = Trajectory(Q_sol, U_sol, v_sol, t, self.track.length)
         fine_plot, _ = self.track.plot_uniform(1)
@@ -205,12 +206,12 @@ class MLTCollocation(PSCollocation):
         fig.show()
 
     @staticmethod
-    def cost(q_1_dot, u, prev_u, k_delta=1e-5, k_f=1e-5):
-        return 1 / q_1_dot  # + k_f * (u[0] * u[1])  + k_delta * (u[2] - prev_u[2])
+    def cost(q_1_dot, u, prev_u, k_delta=1e-5, k_f=1e-3):
+        return 1 / q_1_dot   + k_f * (u[0] * u[1])  + k_delta * ca.fabs(u[2] - prev_u[2])
 
 
 config = {
-    "track": "track_import/generated/monza.json",
+    "track": "track_import/generated/track.json",
     "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
 }
 r_config = {
@@ -232,4 +233,4 @@ r_config = {
 # mr.run()
 
 foo = MLTCollocation(config)
-foo.iteration(np.linspace(0, 1, 20), np.array([20] * 19))
+foo.iteration(np.linspace(0, 1, 90), np.array([5] * 89))

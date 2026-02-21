@@ -11,7 +11,7 @@ import plotly.express as px
 class Trajectory:
 
     def __init__(
-        self, Q: list[np.ndarray], U: list[np.ndarray], v: list, t: np.ndarray, track_length: float
+        self, Q: list[np.ndarray], U: list[np.ndarray], Z: list[np.ndarray],  v: list, t: np.ndarray, track_length: float
     ):
         """
         Constructs a track object, which produces the track state at any
@@ -26,6 +26,7 @@ class Trajectory:
                             of each interval
         """
         self.Q = Q  # q2,...
+        self.Z = Z
         self.v = np.array(v) * track_length
         self.U = U  # fxa fxb delta
         self.t = t * track_length
@@ -43,7 +44,7 @@ class Trajectory:
             tau = np.asarray([-1] + list(tau) + [1])
 
             self.poly.append(
-                scipy.interpolate.BarycentricInterpolator(tau, np.column_stack([U[k], Q[k], self.v[k]]))
+                scipy.interpolate.BarycentricInterpolator(tau, np.column_stack([U[k], Q[k], self.Z, self.v[k]]))
             )
 
     def __call__(self, s: np.ndarray) -> np.ndarray:
@@ -119,6 +120,7 @@ class Trajectory:
         f2.add_trace(go.Scatter(x=s, y=points[:, 1], name="uniform fxb"))
         f3.add_trace(go.Scatter(x=s, y=points[:, 2], name="uniform delta"))
         f4.add_trace(go.Scatter(x=s, y=points[:, -1], name="uniform vel"))
+        f5.add_trace(go.Scatter(x=s, y=points[:, -1], name="uniform vel"))
 
         f1.show()
         f2.show()
