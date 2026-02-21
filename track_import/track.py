@@ -247,6 +247,56 @@ class Track:
             mode="lines",
             line=dict(color=s, colorscale="Viridis"),
         )
+    
+    def plot_raceline_uniform(self, trajectory: Trajectory, approx_spacing=0.1) -> go.Scatter3d:
+        """
+        Makes Ploty graph object for MLT raceline given trajectory object.
+        Plots points uniformly.
+
+        Args:
+            trajectory (Trajectory): Trajectory object
+            approx_spacing (float, optional): Space between plotted points. Defaults to 0.1.
+
+        Returns:
+            go.Scatter3d: Raceline trajectory graph
+        """        
+        s = np.linspace(0, self.length, int(self.length // approx_spacing))
+        ss = trajectory.state(s)
+        r = self.raceline(self.state(s), ss[:, 3])
+
+        return go.Scatter3d(
+            x=r[:, 0],
+            y=r[:, 1],
+            z=r[:, 2],
+            name="line",
+            mode="lines",
+            line=dict(color=ss[:, -1], colorscale="plasma", showscale=True, cmin=trajectory.v.min(), cmax=trajectory.v.max()),
+        )
+
+    def plot_raceline_colloc(self, all_t: np.ndarray, trajectory: Trajectory) -> go.Scatter3d:
+        """
+        Makes Ploty graph object for MLT raceline given trajectory object.
+        Plots collocation and mesh points.
+
+        Args:
+            all_t (np.ndarray): Collocation and mesh points (normalized between 0 and 1)
+            trajectory (Trajectory): Trajectory object
+
+        Returns:
+            go.Scatter3d: Raceline trajectory graph
+        """   
+        r = self.raceline(
+            self.state(self.length * all_t), trajectory.state(all_t * self.length)[:, 3]
+        )
+
+        return go.Scatter3d(
+            x=r[:, 0],
+            y=r[:, 1],
+            z=r[:, 2],
+            name="colloc",
+            mode="markers",
+            # marker=dict(color=trajectory.v, colorscale="plasma"),
+        )
 
     def _find_boundaries(self, state: np.ndarray) -> tuple[float, float]:
         """
@@ -280,34 +330,7 @@ class Track:
 
         return b_l, b_r
 
-    def plot_raceline_uniform(self, trajectory: Trajectory, approx_spacing=0.1):
-        s = np.linspace(0, self.length, int(self.length // approx_spacing))
-        ss = trajectory.state(s)
-        r = self.raceline(self.state(s), ss[:, 3])
-
-        return go.Scatter3d(
-            x=r[:, 0],
-            y=r[:, 1],
-            z=r[:, 2],
-            name="line",
-            mode="lines",
-            line=dict(color=ss[:, -1] * self.length, colorscale="plasma", showscale=True),
-        )
-
-    def plot_raceline_colloc(self, all_t, trajectory: Trajectory):
-        all_t = np.array(all_t)
-        r = self.raceline(
-            self.state(self.length * all_t), trajectory.state(all_t * self.length)[:, 3]
-        )
-
-        return go.Scatter3d(
-            x=r[:, 0],
-            y=r[:, 1],
-            z=r[:, 2],
-            name="colloc",
-            mode="markers",
-            marker=dict(color=trajectory.v, colorscale="plasma"),
-        )
+    
 
     def raceline(self, state: np.ndarray, lateral_displacement: float) -> np.ndarray:
         """

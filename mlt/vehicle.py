@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 from track_import.track import Track
 import casadi as ca
 import pinocchio as pin

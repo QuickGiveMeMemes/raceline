@@ -70,7 +70,7 @@ class Trajectory:
                         for each given arc length parameter
         """
         s = s % self.length
-        k = np.searchsorted(self.t[1:], s)
+        # k = np.searchsorted(self.t[1:], s)
 
         tau, k = self.t_to_tau(s)
         return np.asarray([self.poly[interval](parameter) for parameter, interval in zip(tau, k)])
@@ -97,7 +97,7 @@ class Trajectory:
             line=dict(color=self.v, colorscale="plasma"),
         )
 
-    def plot_uniform(self, t, approx_spacing: float = 0.1):
+    def plot_uniform_and_colloc(self, t, approx_spacing: float = 0.1):
         # Sample uniformly according to the given spacing
         s = np.linspace(0, self.length, int(self.length // approx_spacing))
         points = self(s)
@@ -107,7 +107,7 @@ class Trajectory:
         f3 = go.Figure()
         f4 = go.Figure()
 
-        p1, p2, p3, p4 = self.plot_colloc(t)
+        p1, p2, p3, p4 = self.plot_uv(t)
 
         f1.add_trace(p1)
         f2.add_trace(p2)
@@ -131,10 +131,20 @@ class Trajectory:
             z=points[:, 2],
             name="u fxa fxb delta",
             mode="lines",
-            line=dict(color=self.v, colorscale="plasma"),
+            # line=dict(color=self.v, colorscale="plasma"),
         )
 
-    def plot_colloc(self, s):
+    def plot_uv(self, s: np.ndarray) -> tuple[go.Scatter]:
+        """
+        Plots controls and velocity at given points. Returns correponding
+        graph objects.
+
+        Args:
+            s (np.ndarray): Collocation points
+
+        Returns:
+            tuple[go.Scatter]: Tuple of graphs
+        """        
         # Sample uniformly according to the given spacing
         points = self(s)
 

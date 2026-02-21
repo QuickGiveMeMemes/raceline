@@ -10,7 +10,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 
-
 class MLTCollocation(PSCollocation):
 
     n_q: int = 5
@@ -41,7 +40,6 @@ class MLTCollocation(PSCollocation):
         Z = []
 
         J = 0  # Cost accumulator
-
 
         all_t = []
 
@@ -93,17 +91,17 @@ class MLTCollocation(PSCollocation):
             all_t.append(t_tau[0])
 
             # Collocation constraints (enforces dynamics on X)
-            for i, q_1 in enumerate(t_tau[1:-1]):
+            for i, q_1 in enumerate(t_tau[:-1]):
                 all_t.append(q_1)
                 self.vehicle.set_constraints(
                     q_1,
-                    Q_1_dot[k][i + 1, :],
-                    Q_1_ddot[i + 1, :],
-                    Q_dot[k][i + 1, :],
-                    Q_ddot[k][i + 1, :],
-                    Q[k][i + 1, :],
-                    Z[k][i + 1, :],
-                    U[k][i + 1, :],
+                    Q_1_dot[k][i, :],
+                    Q_1_ddot[i, :],
+                    Q_dot[k][i, :],
+                    Q_ddot[k][i, :],
+                    Q[k][i, :],
+                    Z[k][i, :],
+                    U[k][i, :],
                 )
 
             # Quadrature cost
@@ -113,17 +111,28 @@ class MLTCollocation(PSCollocation):
                 )
                 J += norm_factor * w[j] * lagrange_term
 
-            
+            # Initial guesses
+            # Velocity
+            v_guess = 5
+            self.opti.set_initial(Q_1_dot[k][:, :], v_guess / self.track.length)
 
-            # Initial guess
-            self.opti.set_initial(Q_1_dot[k][:, :], 30 / self.track.length)
-            # self.opti.set_initial(Z[k], ca.DM([[self.vehicle.prop.m_sprung * 9.81] * 4] * (N[k] + 2)))
-
-            # self.opti.set_initial(Q[k])
+            # Vertical tire forces
             self.opti.set_initial(
                 Z[k][:, :], (self.vehicle.prop.m_sprung + self.vehicle.prop.m_unsprung) * 9.81 / 4
             )
-            # self.opti.set_initial(U[k][:, 0], 500)
+
+            # q4
+            self.opti.set_initial(
+                Q[k][:, 2],
+                -(self.vehicle.prop.m_sprung + self.vehicle.prop.m_unsprung)
+                * 9.81
+                / self.vehicle.prop.p(self.vehicle.prop.s_k),
+            )
+
+            # Fxa equal with initial drag
+            self.opti.set_initial(
+                U[k][:, 0], 0.5 * 1.1839 * self.vehicle.prop.g_S * self.vehicle.prop.a_Cx * v_guess**2
+            )
 
         # Periodicity
         self.opti.subject_to(Q[-1][-1, :] == Q[0][0, :])
@@ -132,6 +141,7 @@ class MLTCollocation(PSCollocation):
         self.opti.subject_to(Q_dot[-1][-1, :] == Q_dot[0][0, :])
 
         self.opti.minimize(J)
+
 
         ipopt_settings = {
             # "ipopt.print_frequency_iter": 50,
@@ -175,22 +185,28 @@ class MLTCollocation(PSCollocation):
         Q_sol = [sol.value(seg) for seg in Q]
         v_sol = [sol.value(seg) for seg in Q_1_dot]
 
-        ttt = Trajectory(Q_sol, U_sol, v_sol, t, self.track.length)
-        fine_plot, _ = self.track.plot_uniform( 1)
+        traj = Trajectory(Q_sol, U_sol, v_sol, t, self.track.length)
+        fine_plot, _ = self.track.plot_uniform(1)
 
-        # x = ttt.plot_colloc()
-        xx = ttt.plot_uniform(np.array(all_t) * self.track.length)
+        xx = traj.plot_uniform_and_colloc(all_t * self.track.length)
 
         fig = go.Figure()
         for i in fine_plot:
             fig.add_trace(i)
 
-        fig.add_traces([xx, self.track.plot_raceline_uniform(ttt), self.track.plot_raceline_colloc(all_t, ttt)])
+        fig.add_traces(
+            [
+                xx,
+                self.track.plot_raceline_uniform(traj),
+                self.track.plot_raceline_colloc(all_t, traj),
+            ]
+        )
         fig.update_layout(scene=dict(aspectmode="data"))
         fig.show()
+
     @staticmethod
-    def cost(q_1_dot, u, prev_u, k_delta=1e-4, k_f=1e-4):
-        return 1 / q_1_dot + k_f * (u[0] * u[1])  # + k_delta * (u[2] - prev_u[2])
+    def cost(q_1_dot, u, prev_u, k_delta=1e-5, k_f=1e-5):
+        return 1 / q_1_dot  # + k_f * (u[0] * u[1])  + k_delta * (u[2] - prev_u[2])
 
 
 config = {
@@ -216,4 +232,4 @@ r_config = {
 # mr.run()
 
 foo = MLTCollocation(config)
-foo.iteration(np.linspace(0, 1, 20), np.array([10] * 19))
+foo.iteration(np.linspace(0, 1, 20), np.array([20] * 19))
