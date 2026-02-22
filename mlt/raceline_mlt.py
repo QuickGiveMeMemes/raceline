@@ -45,25 +45,21 @@ class MLTCollocation(PSCollocation):
 
         # Constraints for each segment k
         for k in range(K):
-            # Generates continuous CasADi variables at collocation points
+            # Generates CasADi variables at collocation points
             if k == 0:
                 Q.append(self.opti.variable(N[k] + 2, self.n_q))
                 Q_1_dot.append(self.opti.variable(N[k] + 2, 1))
 
-                # U.append(self.opti.variable(N[k] + 2, self.n_u))
-                # Z.append(self.opti.variable(N[k] + 2, self.n_z))
+                U.append(self.opti.variable(N[k] + 2, self.n_u))
+                Z.append(self.opti.variable(N[k] + 2, self.n_z))
             else:
                 # Explicitly couples last of previous segment with first of current segment
                 # by setting them as the same variable
                 Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
                 Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
 
-                # U.append(ca.vertcat(U[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_u)))
-                # Z.append(ca.vertcat(Z[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_z)))
-
-            # Generates discontinous CasADi variables at collocation points
-            U.append(self.opti.variable(N[k] + 2, self.n_u))
-            Z.append(self.opti.variable(N[k] + 2, self.n_z))
+                U.append(ca.vertcat(U[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_u)))
+                Z.append(ca.vertcat(Z[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_z)))
 
             # Generation of LG collocation points
             tau, w = np.polynomial.legendre.leggauss(N[k])  # w is the quadrature weights
@@ -88,8 +84,6 @@ class MLTCollocation(PSCollocation):
                 self.opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
                 # self.opti.subject_to(Q[k - 1][-1, :] == Q[k][0, :])
 
-            all_t.append(t_tau[0])
-
             # Collocation constraints (enforces dynamics on X)
             for i, q_1 in enumerate(t_tau[:-1]):
                 all_t.append(q_1)
@@ -103,6 +97,8 @@ class MLTCollocation(PSCollocation):
                     Z[k][i, :],
                     U[k][i, :],
                 )
+
+            all_t.append(t_tau[-1])
 
             # Quadrature cost
             for j in range(N[k]):
@@ -131,17 +127,18 @@ class MLTCollocation(PSCollocation):
 
             # Fxa equal with initial drag
             self.opti.set_initial(
-                U[k][:, 0], 0.5 * 1.1839 * self.vehicle.prop.g_S * self.vehicle.prop.a_Cx * v_guess**2
+                U[k][:, 0],
+                0.5 * self.vehicle.env.rho * self.vehicle.prop.g_S * self.vehicle.prop.a_Cx * v_guess**2,
             )
 
         # Periodicity
         self.opti.subject_to(Q[-1][-1, :] == Q[0][0, :])
+        self.opti.subject_to(dQ[-1][-1, :] == dQ[0][0, :])
+        self.opti.subject_to(Q_1_dot[-1][-1, :] == Q_1_dot[0][0, :])
         self.opti.subject_to(Z[-1][-1, :] == Z[0][0, :])
         self.opti.subject_to(U[-1][-1, :] == U[0][0, :])
-        self.opti.subject_to(Q_dot[-1][-1, :] == Q_dot[0][0, :])
 
         self.opti.minimize(J)
-
 
         ipopt_settings = {
             # "ipopt.print_frequency_iter": 50,
@@ -183,31 +180,49 @@ class MLTCollocation(PSCollocation):
 
         U_sol = [sol.value(seg) for seg in U]
         Q_sol = [sol.value(seg) for seg in Q]
+        Z_sol = [sol.value(seg) for seg in Z]
         v_sol = [sol.value(seg) for seg in Q_1_dot]
         all_t = np.array(all_t)
 
-        traj = Trajectory(Q_sol, U_sol, v_sol, t, self.track.length)
+        traj = Trajectory(Q_sol, U_sol, Z_sol, v_sol, t, self.track.length)
+        traj.save("mlt/generated/Zandvoort.json")
+
+        traj = Trajectory.load("mlt/generated/Zandvoort.json")
         fine_plot, _ = self.track.plot_uniform(1)
 
-        xx = traj.plot_uniform_and_colloc(all_t * self.track.length)
+        traj.plot_params(all_t * self.track.length)
 
         fig = go.Figure()
-        for i in fine_plot:
-            fig.add_trace(i)
+        # for i in fine_plot:
+        #     fig.add_trace(i)
 
         fig.add_traces(
             [
-                xx,
-                self.track.plot_raceline_uniform(traj),
+                *fine_plot,
                 self.track.plot_raceline_colloc(all_t, traj),
+                self.track.plot_raceline_uniform(traj),
             ]
         )
-        fig.update_layout(scene=dict(aspectmode="data"))
+        fig.add_trace(self.track.plot_ribbon())
+
+        # fig.update_layout(coloraxis_colorbar=dict(y=0.1, yanchor="bottom"))
+
+        fig.update_layout(
+            scene=dict(
+                aspectmode="data",
+                xaxis=dict(showbackground=False),
+                yaxis=dict(showbackground=False),
+                zaxis=dict(showbackground=False),
+            ),
+            legend=dict(
+                orientation="h",
+            ),
+        )
         fig.show()
 
     @staticmethod
     def cost(q_1_dot, u, prev_u, k_delta=1e-5, k_f=1e-3):
-        return 1 / q_1_dot   + k_f * (u[0] * u[1])  + k_delta * ca.fabs(u[2] - prev_u[2])
+        return 1 / q_1_dot + k_f * (u[0] * u[1]) + k_delta * ca.fabs(u[2] - prev_u[2])
 
 
 config = {

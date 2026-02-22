@@ -141,9 +141,151 @@ class Track:
         tau, k = self.t_to_tau(s)
         return np.asarray(
             [
-                self.poly[interval].derivative(parameter, der=n) * (2.0 / (self.t[interval+1] - self.t[interval])) ** n
+                self.poly[interval].derivative(parameter, der=n)
+                * (2.0 / (self.t[interval + 1] - self.t[interval])) ** n
                 for parameter, interval in zip(tau, k)
             ]
+        )
+
+    def _find_boundaries(self, state: np.ndarray) -> tuple[float, float]:
+        """
+        Computes track boundaries
+
+        Args:
+            state (np.ndarray): Array of states at each point
+                                [[x, y, z, theta, mu, phi, n_l, n_r], ...]
+
+        Returns:
+            tuple: Tuple of left and right boundaries (b_l, b_r)
+        """
+        # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
+        x = state[:, :3]
+        theta = state[:, 3]
+        mu = state[:, 4]
+        phi = state[:, 5]
+        n_l = state[:, 6]
+        n_r = state[:, 7]
+
+        n = np.column_stack(
+            [
+                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
+                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
+                np.cos(mu) * np.sin(phi),
+            ]
+        )
+
+        b_l = x + n * n_l[:, np.newaxis]
+        b_r = x + n * n_r[:, np.newaxis]
+
+        return b_l, b_r
+
+    def raceline(self, state: np.ndarray, lateral_displacement: float) -> np.ndarray:
+        """
+        Computes raceline
+
+        Args:
+            state (np.ndarray): Array of states at each point
+                                [[x, y, z, theta, mu, phi, n_l, n_r], ...]
+
+
+        Returns:
+        """
+        # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
+        x = state[:, :3]
+        theta = state[:, 3]
+        mu = state[:, 4]
+        phi = state[:, 5]
+
+        n = np.column_stack(
+            [
+                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
+                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
+                np.cos(mu) * np.sin(phi),
+            ]
+        )
+
+        raceline_point = x + n * lateral_displacement[:, np.newaxis]
+
+        return raceline_point
+
+    def tau_to_t(self, tau: float | np.ndarray, k: float | np.ndarray) -> float | np.ndarray:
+        """
+        Converts tau (interval parameter) to arc length
+
+        Args:
+            tau (float | np.ndarray): _description_
+            k (float | np.ndarray): _description_
+
+        Returns:
+            float | np.ndarray: Array or value of arc length parameter(s)
+        """
+        norm_factor = (self.t[k + 1] - self.t[k]) / 2
+        shift = (self.t[k + 1] + self.t[k]) / 2
+
+        return norm_factor * tau + shift
+
+    def t_to_tau(self, t: float | np.ndarray) -> tuple[float | np.ndarray, int | np.ndarray]:
+        """
+        Converts arc length parameter to tau (interval parameter), can be used with either a numeric value or an
+        array of numeric values
+
+        Args:
+            t (float | np.ndarray): Arc length parameter(s)
+
+        Returns:
+            tuple: Array or value of converted tau(s), array of (or single) interval index
+        """
+        # Adjusts for periodicity and finds index/indices of the beginning of the relevant segment
+        t %= self.length
+        k = np.searchsorted(self.t[1:], t)
+
+        norm_factor = 2 / (self.t[k + 1] - self.t[k])
+        shift = (self.t[k + 1] + self.t[k]) / (self.t[k + 1] - self.t[k])
+        return norm_factor * t - shift, k
+
+    def save(self, file: str):
+        """
+        Saves track data to json file
+
+        Args:
+            file (str): File name
+        """
+        data = dict(
+            x=[x.tolist() for x in self.X],
+            q=[q.tolist() for q in self.Q],
+            t=self.t.tolist(),
+        )
+        with open(file, "w") as f:
+            json.dump(data, f)
+
+    @staticmethod
+    def load(file: str):
+        """
+        Loads track data from the provided json file
+
+        Args:
+            file (str): Json file name
+        """
+        with open(file, "r") as f:
+            data = json.load(f)
+
+        return Track(
+            [np.array(q) for q in data["q"]], [np.array(x) for x in data["x"]], np.array(data["t"])
+        )
+
+    # Plotting methods
+    def plot_ribbon(self, approx_spacing=1):
+        # Sample uniformly according to the given spacing
+        s = np.linspace(0, self.length, int(self.length // approx_spacing))
+        points = self(s)
+
+        return go.Surface(
+            x=np.array([points[:, 0], points[:, 3]]),
+            y=np.array([points[:, 1], points[:, 4]]),
+            z=np.array([points[:, 2], points[:, 5]]),
+            opacity=0.8,
+            colorscale=[[0,'#D3D3D3'],[1,'#D3D3D3']],
+            showscale=False
         )
 
     def plot_collocation(self):
@@ -247,7 +389,7 @@ class Track:
             mode="lines",
             line=dict(color=s, colorscale="Viridis"),
         )
-    
+
     def plot_raceline_uniform(self, trajectory: Trajectory, approx_spacing=0.1) -> go.Scatter3d:
         """
         Makes Ploty graph object for MLT raceline given trajectory object.
@@ -259,7 +401,7 @@ class Track:
 
         Returns:
             go.Scatter3d: Raceline trajectory graph
-        """        
+        """
         s = np.linspace(0, self.length, int(self.length // approx_spacing))
         ss = trajectory.state(s)
         r = self.raceline(self.state(s), ss[:, 3])
@@ -270,7 +412,14 @@ class Track:
             z=r[:, 2],
             name="line",
             mode="lines",
-            line=dict(color=ss[:, -1], colorscale="plasma", showscale=True, cmin=trajectory.v.min(), cmax=trajectory.v.max()),
+            line=dict(
+                color=ss[:, -1],
+                colorscale="jet",
+                showscale=True,
+                cmin=trajectory.v.min(),
+                cmax=trajectory.v.max(),
+                width=6,
+            ),
         )
 
     def plot_raceline_colloc(self, all_t: np.ndarray, trajectory: Trajectory) -> go.Scatter3d:
@@ -284,7 +433,7 @@ class Track:
 
         Returns:
             go.Scatter3d: Raceline trajectory graph
-        """   
+        """
         r = self.raceline(
             self.state(self.length * all_t), trajectory.state(all_t * self.length)[:, 3]
         )
@@ -296,132 +445,4 @@ class Track:
             name="colloc",
             mode="markers",
             # marker=dict(color=trajectory.v, colorscale="plasma"),
-        )
-
-    def _find_boundaries(self, state: np.ndarray) -> tuple[float, float]:
-        """
-        Computes track boundaries
-
-        Args:
-            state (np.ndarray): Array of states at each point
-                                [[x, y, z, theta, mu, phi, n_l, n_r], ...]
-
-        Returns:
-            tuple: Tuple of left and right boundaries (b_l, b_r)
-        """
-        # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
-        x = state[:, :3]
-        theta = state[:, 3]
-        mu = state[:, 4]
-        phi = state[:, 5]
-        n_l = state[:, 6]
-        n_r = state[:, 7]
-
-        n = np.column_stack(
-            [
-                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
-                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
-                np.cos(mu) * np.sin(phi),
-            ]
-        )
-
-        b_l = x + n * n_l[:, np.newaxis]
-        b_r = x + n * n_r[:, np.newaxis]
-
-        return b_l, b_r
-
-    
-
-    def raceline(self, state: np.ndarray, lateral_displacement: float) -> np.ndarray:
-        """
-        Computes raceline
-
-        Args:
-            state (np.ndarray): Array of states at each point
-                                [[x, y, z, theta, mu, phi, n_l, n_r], ...]
-
-
-        Returns:
-        """
-        # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
-        x = state[:, :3]
-        theta = state[:, 3]
-        mu = state[:, 4]
-        phi = state[:, 5]
-
-        n = np.column_stack(
-            [
-                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
-                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
-                np.cos(mu) * np.sin(phi),
-            ]
-        )
-
-        rl = x + n * lateral_displacement[:, np.newaxis]
-
-        return rl
-
-    def tau_to_t(self, tau: float | np.ndarray, k: float | np.ndarray) -> float | np.ndarray:
-        """
-        Converts tau (interval parameter) to arc length
-
-        Args:
-            tau (float | np.ndarray): _description_
-            k (float | np.ndarray): _description_
-
-        Returns:
-            float | np.ndarray: Array or value of arc length parameter(s)
-        """
-        norm_factor = (self.t[k + 1] - self.t[k]) / 2
-        shift = (self.t[k + 1] + self.t[k]) / 2
-
-        return norm_factor * tau + shift
-
-    def t_to_tau(self, t: float | np.ndarray) -> tuple[float | np.ndarray, int | np.ndarray]:
-        """
-        Converts arc length parameter to tau (interval parameter), can be used with either a numeric value or an
-        array of numeric values
-
-        Args:
-            t (float | np.ndarray): Arc length parameter(s)
-
-        Returns:
-            tuple: Array or value of converted tau(s), array of (or single) interval index
-        """
-        # Adjusts for periodicity and finds index/indices of the beginning of the relevant segment
-        t %= self.length
-        k = np.searchsorted(self.t[1:], t)
-
-        norm_factor = 2 / (self.t[k + 1] - self.t[k])
-        shift = (self.t[k + 1] + self.t[k]) / (self.t[k + 1] - self.t[k])
-        return norm_factor * t - shift, k
-
-    def save(self, file: str):
-        """
-        Saves track data to json file
-
-        Args:
-            file (str): File name
-        """
-        data = dict(
-            x=[x.tolist() for x in self.X],
-            q=[q.tolist() for q in self.Q],
-            t=self.t.tolist(),
-        )
-        with open(file, "w") as f:
-            json.dump(data, f)
-
-    @staticmethod
-    def load(file: str):
-        """
-        Loads track data from the provided json file
-
-        Args:
-            file (str): Json file name
-        """
-        with open(file, "r") as f:
-            data = json.load(f)
-
-        return Track(
-            [np.array(q) for q in data["q"]], [np.array(x) for x in data["x"]], np.array(data["t"])
         )

@@ -11,7 +11,13 @@ import plotly.express as px
 class Trajectory:
 
     def __init__(
-        self, Q: list[np.ndarray], U: list[np.ndarray], Z: list[np.ndarray],  v: list, t: np.ndarray, track_length: float
+        self,
+        Q: list[np.ndarray],
+        U: list[np.ndarray],
+        Z: list[np.ndarray],
+        v: list,
+        t: np.ndarray,
+        track_length: float,
     ):
         """
         Constructs a track object, which produces the track state at any
@@ -32,10 +38,9 @@ class Trajectory:
         self.t = t * track_length
         self.length = track_length
 
-        # [x, y, z, theta, mu, phi, n_l, n_r]
         # List of the interpolated polynomial over each interval
+        # [fxa, fxb, delta, q2, q3, q4, q5, q6, fz11, fz12, fz21, fz22, v]
         self.poly = []
-        # self.length = t[-1]
 
         for k in range(len(Q)):
             # Number of collocation points
@@ -44,7 +49,9 @@ class Trajectory:
             tau = np.asarray([-1] + list(tau) + [1])
 
             self.poly.append(
-                scipy.interpolate.BarycentricInterpolator(tau, np.column_stack([U[k], Q[k], self.Z, self.v[k]]))
+                scipy.interpolate.BarycentricInterpolator(
+                    tau, np.column_stack([U[k], Q[k], self.Z[k], self.v[k]])
+                )
             )
 
     def __call__(self, s: np.ndarray) -> np.ndarray:
@@ -55,7 +62,7 @@ class Trajectory:
             s (np.ndarray): Array of arc length parameters
 
         Returns:
-            np.ndarray: Array whose columns are [b_l, b_r, x, y, z]
+            np.ndarray: Array whose columns are [fxa, fxb, delta, q2, q3, q4, q5, q6, fz11, fz12, fz21, fz22, v]
         """
         return self.state(s)
 
@@ -67,7 +74,7 @@ class Trajectory:
             s (np.ndarray): Array of arc length parameters
 
         Returns:
-            np.ndarray: Array containing states [x, y, z, theta, mu, phi, n_l, n_r]
+            np.ndarray: Array containing states [fxa, fxb, delta, q2, q3, q4, q5, q6, fz11, fz12, fz21, fz22, v]
                         for each given arc length parameter
         """
         s = s % self.length
@@ -78,12 +85,10 @@ class Trajectory:
 
     def plot_collocation(self):
         """
-        Makes Plotly GraphObjects for centerline, left/right boundaries of track, and
-        theta, mu, and phi at the collocation points
+        Makes Plotly GraphObject for controls at the collocation points
 
         Returns:
-            tuple: Tuple of list of GraphObjects for centerline + left/right boundaries
-                   and GraphObject for theta/mu/phi
+            go.Scatter3d: Controls at collocation points
         """
 
         # Make a real array, not some dumb list
@@ -98,73 +103,57 @@ class Trajectory:
             line=dict(color=self.v, colorscale="plasma"),
         )
 
-    def plot_uniform_and_colloc(self, t, approx_spacing: float = 0.1):
+    def plot_params(self, t, approx_spacing: float = 0.1):
         # Sample uniformly according to the given spacing
         s = np.linspace(0, self.length, int(self.length // approx_spacing))
-        points = self(s)
+        uniform = self(s)
 
-        f1 = go.Figure()
-        f2 = go.Figure()
-        f3 = go.Figure()
-        f4 = go.Figure()
+        collocation = np.hstack(
+            [
+                np.concatenate(self.U),
+                np.concatenate(self.Q),
+                np.concatenate(self.Z),
+                self.v.reshape((-1, 1)),
+            ]
+        )
 
-        p1, p2, p3, p4 = self.plot_uv(t)
+        params = [
+            "fxa",
+            "fxb",
+            "delta",
+            "q2",
+            "q3",
+            "q4",
+            "q5",
+            "q6",
+            "fz11",
+            "fz12",
+            "fz21",
+            "fz22",
+            "v",
+        ]
+        figs = []
 
-        f1.add_trace(p1)
-        f2.add_trace(p2)
-        f3.add_trace(p3)
-        f4.add_trace(p4)
+        for i, p in enumerate(params):
+            if "fz" not in p or p == "fz11":
+                figs.append(go.Figure())
 
+            figs[-1].add_trace(go.Scatter(x=s, y=uniform[:, i], name=f"uniform {p}"))
+            figs[-1].add_trace(
+                go.Scatter(x=t, y=collocation[:, i], name=f"colloc {p}", mode="markers")
+            )
 
-        f1.add_trace(go.Scatter(x=s, y=points[:, 0], name="uniform fxa"))
-        f2.add_trace(go.Scatter(x=s, y=points[:, 1], name="uniform fxb"))
-        f3.add_trace(go.Scatter(x=s, y=points[:, 2], name="uniform delta"))
-        f4.add_trace(go.Scatter(x=s, y=points[:, -1], name="uniform vel"))
-        f5.add_trace(go.Scatter(x=s, y=points[:, -1], name="uniform vel"))
-
-        f1.show()
-        f2.show()
-        f3.show()
-        f4.show()
+        for f in figs:
+            f.show()
 
         return go.Scatter3d(
-            x=points[:, 0],
-            y=points[:, 1],
-            z=points[:, 2],
+            x=uniform[:, 0],
+            y=uniform[:, 1],
+            z=uniform[:, 2],
             name="u fxa fxb delta",
             mode="lines",
             # line=dict(color=self.v, colorscale="plasma"),
         )
-
-    def plot_uv(self, s: np.ndarray) -> tuple[go.Scatter]:
-        """
-        Plots controls and velocity at given points. Returns correponding
-        graph objects.
-
-        Args:
-            s (np.ndarray): Collocation points
-
-        Returns:
-            tuple[go.Scatter]: Tuple of graphs
-        """        
-        # Sample uniformly according to the given spacing
-        points = self(s)
-
-
-        return (
-            go.Scatter(x=s, y=points[:, 0], name="fxa",mode='markers',),
-            go.Scatter(x=s, y=points[:, 1], name="fxb",mode='markers',),
-            go.Scatter(x=s, y=points[:, 2], name="delta",mode='markers',),
-            go.Scatter(x=s, y=points[:, -1], name="vel",mode='markers',),
-        )
-        # return go.Scatter3d(
-        #     x=points[:, 0],
-        #     y=points[:, 1],
-        #     z=points[:, 2],
-        #     name="u fxa fxb delta",
-        #     mode="lines",
-        #     line=dict(color=self.v, colorscale="plasma"),
-        # )
 
     def tau_to_t(self, tau: float | np.ndarray, k: float | np.ndarray) -> float | np.ndarray:
         """
@@ -200,3 +189,41 @@ class Trajectory:
         norm_factor = 2 / (self.t[k + 1] - self.t[k])
         shift = (self.t[k + 1] + self.t[k]) / (self.t[k + 1] - self.t[k])
         return norm_factor * t - shift, k
+
+    def save(self, file: str):
+        """
+        Saves trajectory data to json file
+
+        Args:
+            file (str): File name
+        """
+        data = dict(
+            q=[q.tolist() for q in self.Q],
+            u=[u.tolist() for u in self.U],
+            z=[z.tolist() for z in self.Z],
+            v=(self.v / self.length).tolist(),
+            t=(self.t / self.length).tolist(),
+            length=self.length,
+        )
+        with open(file, "w") as f:
+            json.dump(data, f)
+
+    @staticmethod
+    def load(file: str):
+        """
+        Loads track data from the provided json file
+
+        Args:
+            file (str): Json file name
+        """
+        with open(file, "r") as f:
+            data = json.load(f)
+
+        return Trajectory(
+            [np.array(q) for q in data["q"]],
+            [np.array(u) for u in data["u"]],
+            [np.array(z) for z in data["z"]],
+            np.array(data["v"]),
+            np.array(data["t"]),
+            data["track_length"]
+        )
