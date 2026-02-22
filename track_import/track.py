@@ -146,6 +146,20 @@ class Track:
                 for parameter, interval in zip(tau, k)
             ]
         )
+    
+    def normal(self, state):
+        # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
+        theta = state[:, 3]
+        mu = state[:, 4]
+        phi = state[:, 5]
+
+        return np.column_stack(
+            [
+                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
+                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
+                np.cos(mu) * np.sin(phi),
+            ]
+        )
 
     def _find_boundaries(self, state: np.ndarray) -> tuple[float, float]:
         """
@@ -160,19 +174,10 @@ class Track:
         """
         # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
         x = state[:, :3]
-        theta = state[:, 3]
-        mu = state[:, 4]
-        phi = state[:, 5]
         n_l = state[:, 6]
         n_r = state[:, 7]
 
-        n = np.column_stack(
-            [
-                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
-                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
-                np.cos(mu) * np.sin(phi),
-            ]
-        )
+        n = self.normal(state)
 
         b_l = x + n * n_l[:, np.newaxis]
         b_r = x + n * n_r[:, np.newaxis]
@@ -192,17 +197,8 @@ class Track:
         """
         # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
         x = state[:, :3]
-        theta = state[:, 3]
-        mu = state[:, 4]
-        phi = state[:, 5]
 
-        n = np.column_stack(
-            [
-                np.cos(theta) * np.sin(mu) * np.sin(phi) - np.sin(theta) * np.cos(phi),
-                np.sin(theta) * np.sin(mu) * np.sin(phi) + np.cos(theta) * np.cos(phi),
-                np.cos(mu) * np.sin(phi),
-            ]
-        )
+        n = self.normal(state)
 
         raceline_point = x + n * lateral_displacement[:, np.newaxis]
 
@@ -283,8 +279,8 @@ class Track:
             x=np.array([points[:, 0], points[:, 3]]),
             y=np.array([points[:, 1], points[:, 4]]),
             z=np.array([points[:, 2], points[:, 5]]),
-            opacity=0.8,
-            colorscale=[[0,'#D3D3D3'],[1,'#D3D3D3']],
+            opacity=0.9,
+            colorscale=[[0,"#848484"],[1,'#D3D3D3']],
             showscale=False
         )
 

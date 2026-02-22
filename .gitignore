@@ -1,5 +1,5 @@
 venv
 .vscode
-generated/*.json
+**/generated/*.json
 **/__pycache__
 *.c

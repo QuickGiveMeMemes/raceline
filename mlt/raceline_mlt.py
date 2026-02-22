@@ -131,6 +131,9 @@ class MLTCollocation(PSCollocation):
                 0.5 * self.vehicle.env.rho * self.vehicle.prop.g_S * self.vehicle.prop.a_Cx * v_guess**2,
             )
 
+            # delta
+            curvature = np.sqrt(np.sum(self.track.der_state(t_tau * self.track.length, 2)[:3]**2, axis=1))
+
         # Periodicity
         self.opti.subject_to(Q[-1][-1, :] == Q[0][0, :])
         self.opti.subject_to(dQ[-1][-1, :] == dQ[0][0, :])
@@ -153,6 +156,8 @@ class MLTCollocation(PSCollocation):
             "ipopt.hessian_approximation": "exact",
             "ipopt.derivative_test": "none",
         }
+
+        # Solve!
         try:
             self.opti.solver("ipopt", ipopt_settings)
         except Exception as e:
@@ -178,23 +183,25 @@ class MLTCollocation(PSCollocation):
 
         print(f"Final cost: {sol.value(J)}")
 
+        # Collect solution
         U_sol = [sol.value(seg) for seg in U]
         Q_sol = [sol.value(seg) for seg in Q]
         Z_sol = [sol.value(seg) for seg in Z]
         v_sol = [sol.value(seg) for seg in Q_1_dot]
         all_t = np.array(all_t)
 
+        # Create Trajectory and save it
         traj = Trajectory(Q_sol, U_sol, Z_sol, v_sol, t, self.track.length)
         traj.save("mlt/generated/Zandvoort.json")
 
         traj = Trajectory.load("mlt/generated/Zandvoort.json")
+
+        # Visualize
         fine_plot, _ = self.track.plot_uniform(1)
 
         traj.plot_params(all_t * self.track.length)
 
         fig = go.Figure()
-        # for i in fine_plot:
-        #     fig.add_trace(i)
 
         fig.add_traces(
             [
@@ -204,8 +211,6 @@ class MLTCollocation(PSCollocation):
             ]
         )
         fig.add_trace(self.track.plot_ribbon())
-
-        # fig.update_layout(coloraxis_colorbar=dict(y=0.1, yanchor="bottom"))
 
         fig.update_layout(
             scene=dict(
