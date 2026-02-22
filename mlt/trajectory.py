@@ -225,5 +225,5 @@ class Trajectory:
             [np.array(z) for z in data["z"]],
             np.array(data["v"]),
             np.array(data["t"]),
-            data["track_length"]
+            data["length"]
         )
