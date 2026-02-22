@@ -132,7 +132,15 @@ class MLTCollocation(PSCollocation):
             )
 
             # delta
-            curvature = np.sqrt(np.sum(self.track.der_state(t_tau * self.track.length, 2)[:3]**2, axis=1))
+            curvature = np.sqrt(np.sum(self.track.der_state(t_tau * self.track.length, 2)[:, :3]**2, axis=1))
+            normal = self.track.normal(self.track(t_tau))
+            tangent = self.track.der_state(t_tau)[:, :3]
+            b = np.cross(normal, tangent, axis=1)
+ 
+            curvature[b[:, 2] > 0] *= -1
+            wheelbase = sum(self.vehicle.prop.g_a)
+            delta_guess = np.atan(wheelbase * curvature)
+            self.opti.set_initial(U[k][:, 2], delta_guess)
 
         # Periodicity
         self.opti.subject_to(Q[-1][-1, :] == Q[0][0, :])
