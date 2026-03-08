@@ -31,6 +31,7 @@ class MLTCollocation(PSCollocation):
         K = len(N)
 
         Q_1_dot = []
+        Q_1_ddot = []
 
         # Q, dQ, ddQ are (N_k + 2) x (n_q).
         Q = []  # Array containing Q matrices. q_j = [theta, mu, phi, n_l, n_r].
@@ -49,7 +50,10 @@ class MLTCollocation(PSCollocation):
             # Generates CasADi variables at collocation points
             if k == 0:
                 Q.append(self.opti.variable(N[k] + 2, self.n_q))
+                dQ.append(self.opti.variable(N[k] + 2, self.n_q))
+                ddQ.append(self.opti.variable(N[k] + 2, self.n_q))
                 Q_1_dot.append(self.opti.variable(N[k] + 2, 1))
+                Q_1_ddot.append(self.opti.variable(N[k] + 2, 1))
 
                 U.append(self.opti.variable(N[k] + 2, self.n_u))
                 Z.append(self.opti.variable(N[k] + 2, self.n_z))
@@ -58,7 +62,11 @@ class MLTCollocation(PSCollocation):
                 # Explicitly couples last of previous segment with first of current segment
                 # by setting them as the same variable
                 Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
+                dQ.append(ca.vertcat(dQ[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
+                ddQ.append(ca.vertcat(ddQ[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
+
                 Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
+                Q_1_ddot.append(ca.vertcat(Q_1_ddot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
 
                 U.append(ca.vertcat(U[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_u)))
                 Z.append(ca.vertcat(Z[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_z)))
@@ -79,16 +87,24 @@ class MLTCollocation(PSCollocation):
             t_tau = norm_factor * tau + t_tau_0  # Global time (t) at collocation points
 
             # Time derivative calculation
-            dQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k]))
-            ddQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ[k]))
-            Q_1_ddot = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k]
+            # dQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k]))
+            # ddQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ[k]))
+            # Q_1_ddot = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k]
+
+            # print(dQ[k][:-1, :].shape, D.shape, Q[k][:-1, :].shape)
+
+            # der_scale = (2 / (t[k + 1] - t[k]))
+
+            self.opti.subject_to(norm_factor * dQ[k][:-1, :] == ca.mtimes(D, Q[k])[:-1, :])
+            self.opti.subject_to(norm_factor * ddQ[k][:-1, :] == ca.mtimes(D, dQ[k])[:-1, :])
+            self.opti.subject_to(norm_factor * Q_1_ddot[k][:-1, :] == ca.mtimes(D, Q_1_dot[k])[:-1, :] * Q_1_dot[k][:-1, :])
 
             Q_dot.append(dQ[k] * Q_1_dot[k])
-            Q_ddot.append(ddQ[k] * Q_1_dot[k] ** 2 + dQ[k] * Q_1_ddot)
+            Q_ddot.append(ddQ[k] * Q_1_dot[k] ** 2 + dQ[k] * Q_1_ddot[k])
 
             # Continuity constraints
-            if k != 0:
-                self.opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
+            # if k != 0:
+            #     self.opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
 
             # Collocation constraints (enforces dynamics on X)
             for i, q_1 in enumerate(t_tau[:-1]):
@@ -100,7 +116,7 @@ class MLTCollocation(PSCollocation):
                 self.vehicle.set_constraints(
                     q_1,
                     Q_1_dot[k][i, :],
-                    Q_1_ddot[i, :],
+                    Q_1_ddot[k][i, :],
                     Q_dot[k][i, :],
                     Q_ddot[k][i, :],
                     Q[k][i, :],
@@ -192,6 +208,7 @@ class MLTCollocation(PSCollocation):
         self.opti.subject_to(Q[-1][-1, :] == Q[0][0, :])
         self.opti.subject_to(dQ[-1][-1, :] == dQ[0][0, :])
         self.opti.subject_to(Q_1_dot[-1][-1, :] == Q_1_dot[0][0, :])
+        self.opti.subject_to(Q_1_ddot[-1][-1, :] == Q_1_ddot[0][0, :])
         self.opti.subject_to(Z[-1][-1, :] == Z[0][0, :])
         self.opti.subject_to(U[-1][-1, :] == U[0][0, :])
 
@@ -309,7 +326,7 @@ class MLTCollocation(PSCollocation):
 if __name__ == "__main__":
 
     config = {
-        "track": "track_import/generated/COTA.json",
+        "track": "track_import/generated/cota_test.json",
         "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
     }
     r_config = {
@@ -331,12 +348,12 @@ if __name__ == "__main__":
     track = None
     # zandvoort 90 4
     # 120 fails to solve but almost converges
-    for n in [90]:
+    for n in [60]:
         print(f"{n} segments")
         mlt = MLTCollocation(config)
         mr = MeshRefinement(mlt, r_config)
 
-        track = mlt.iteration(np.linspace(0, 1, n), np.array([4] * (n - 1)), track)
+        track = mlt.iteration(np.linspace(0, 1, n), np.array([3] * (n - 1)), track)
         track.save("mlt/generated/testing.json")
 
         props = VehicleProperties.load_yaml("mlt/vehicle_properties/DallaraAV24.yaml")
