@@ -215,6 +215,26 @@ class Track:
         raceline_point = x + n * lateral_displacement[:, np.newaxis]
 
         return raceline_point
+    
+    def raceline_casadi(self, s: np.ndarray, lateral_displacement: float) -> np.ndarray:
+        """
+        Computes raceline
+
+        Args:
+            s (np.ndarray): Arc length parameters
+
+
+        Returns:
+        """
+        # State is in the form [[x, y, z, theta, mu, phi, n_l, n_r], ...]
+        state = self.state(s)
+        x = state[:, :3]
+
+        n = self.tnb(s)[1]
+
+        raceline_point = x + n * lateral_displacement
+
+        return raceline_point
 
     def tau_to_t(self, tau: float | np.ndarray, k: float | np.ndarray) -> float | np.ndarray:
         """

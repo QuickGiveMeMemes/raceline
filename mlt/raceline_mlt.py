@@ -9,8 +9,8 @@ import casadi as ca
 from mlt.trajectory import Trajectory
 import plotly.graph_objects as go
 import plotly.express as px
-
-
+from mlt.raceline_mc import MinCurvatureCollocation
+import scipy
 
 class MLTCollocation(PSCollocation):
 
@@ -43,6 +43,11 @@ class MLTCollocation(PSCollocation):
 
         U = []
         Z = []
+
+        if warm_start is None:
+            print("Solving minumum curvature problem due to cold start")
+            min_curvature = MinCurvatureCollocation(self.config)
+            q2, dq2, ddq2 = min_curvature.iteration(t, N)
 
         J = 0  # Cost accumulator
 
@@ -135,20 +140,28 @@ class MLTCollocation(PSCollocation):
             else:
                 # Cold start guesses
                 # Velocity
-                curvature = np.sqrt(
-                    np.sum(self.track.der_state(t_tau * self.track.length, 2)[:, :3] ** 2, axis=1)
+
+                min_curve_raceline = self.track.raceline(t_tau * self.track.length, q2[k])
+
+                dr = np.matmul(D, min_curve_raceline) / norm_factor
+                ddr = np.matmul(D, dr) / norm_factor
+
+                # raceline_interp = scipy.interpolate.BarycentricInterpolator(t_tau * self.track.length, min_curve_raceline)
+
+                # dr = raceline_interp.derivative(t_tau * self.track.length, der=1)
+                # ddr = raceline_interp.derivative(t_tau * self.track.length, der=2)
+
+                real_curvature = np.linalg.norm(np.cross(dr, ddr), axis=1) / (np.linalg.norm(dr, axis=1)**3 + 1e-10)
+
+                v_guess = 30 #np.sqrt(0.7 * self.vehicle.prop.t_Dy1[0] * 9.81 / (np.abs(np.array(real_curvature)) + 1e-10))
+
+                self.opti.set_initial(
+                    Q_1_dot[k][:, :],   
+                    np.clip(v_guess, 10, 50) / self.track.length,
                 )
-                b = self.track.tnb_better(t_tau * self.track.length)[2]
 
-                curvature[b[:, 2] < 0] *= -1
-                
-                v_guess = 30
-                # self.opti.set_initial(
-                #     Q_1_dot[k][:, :],
-                #     np.clip(v_guess, 5, 90) / self.track.length,
-                # )
+                # v_guess = v_guess[:-1]
 
-                self.opti.set_initial(Q_1_dot[k][:, :], 30 / self.track.length)
                 # Vertical tire forces
                 for i in range(2):
                     downforce = (
@@ -170,7 +183,7 @@ class MLTCollocation(PSCollocation):
                         )
 
                 # q2
-                # self.opti.set_initial(Q[k][:, 0], q2[k])
+                self.opti.set_initial(Q[k][:, 0], q2[k])
 
                 # q4
                 self.opti.set_initial(
@@ -192,7 +205,7 @@ class MLTCollocation(PSCollocation):
 
                 # delta
                 wheelbase = sum(self.vehicle.prop.g_a)
-                delta_guess = np.atan(wheelbase * curvature)
+                delta_guess = np.atan(wheelbase * real_curvature)
 
                 self.opti.set_initial(U[k][:, 2], delta_guess[:-1])
 
@@ -210,7 +223,7 @@ class MLTCollocation(PSCollocation):
             "ipopt.print_frequency_iter": 25,
             "print_time": 0,
             "ipopt.sb": "no",
-            "ipopt.max_iter": 3000,
+            "ipopt.max_iter": 5000,
             "detect_simple_bounds": True,
             "ipopt.linear_solver": "ma97",
             "ipopt.mu_strategy": "adaptive",
@@ -223,6 +236,7 @@ class MLTCollocation(PSCollocation):
             # "ipopt.limited_memory_update_type": "bfgs",
             "ipopt.derivative_test": "none",
         }
+
 
         if warm_start is not None:
             ipopt_settings["ipopt.warm_start_init_point"] = "yes"
@@ -248,10 +262,12 @@ class MLTCollocation(PSCollocation):
         try:
             sol = self.opti.solve()
             stats = sol.stats()
+            
             print(f"Solve iteration succeeded in {stats['iter_count']} iterations")
         except:
             sol = self.opti.debug
             stats = sol.stats()
+            
             print(f"Solve iteration failed after {stats['iter_count']} iteration...")
 
         print(f"Final cost: {sol.value(J)}")
@@ -320,7 +336,7 @@ class MLTCollocation(PSCollocation):
 if __name__ == "__main__":
 
     config = {
-        "track": "track_import/generated/circle.json",
+        "track": "track_import/generated/track.json",
         # "track": "foo.json",
         "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
     }
@@ -357,7 +373,7 @@ if __name__ == "__main__":
         # Visualize
         fine_plot, _ = mr.colloc.track.plot_uniform(1)
 
-        traj.plot_collocation()
+        traj.plot_collocation(plot_q=False)
 
         fig = go.Figure()
 

@@ -504,9 +504,6 @@ class Vehicle:
                 )
 
 
-
-              
-
     def calculate_freeflyer_config(self, q_1):
         q_1_dot = ca.SX.sym("q_1_dot")
         q_1_ddot = ca.SX.sym("q_1_ddot")

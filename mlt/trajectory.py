@@ -148,6 +148,7 @@ class Trajectory:
                 go.Scatter(x=t, y=collocation[:, i], name=f"colloc {p}", mode="markers")
             )
 
+
         for f in figs:
             f.show()
 
