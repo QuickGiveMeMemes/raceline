@@ -9,148 +9,8 @@ import casadi as ca
 from mlt.trajectory import Trajectory
 import plotly.graph_objects as go
 import plotly.express as px
-
-
-class MinCurvatureCollocation(PSCollocation):
-
-    n_q: int = 1
-
-    def __init__(self, config: dict):
-        super().__init__()
-        self.config = config
-        self.track = Track.load(config["track"])
-        self.start_t = 0
-        self.end_t = 1
-
-    def iteration(self, t: np.ndarray, N: np.ndarray, warm_start: None | Trajectory = None):
-        self.opti = ca.Opti()
-        self.vehicle = Vehicle(self.config["vehicle_properties"], self.track, self.opti)
-
-        K = len(N)
-
-        # Q, dQ, ddQ are (N_k + 2) x (n_q).
-        Q = []  # Array containing Q matrices. q_j = [q2].
-        dQ = []
-        ddQ = []
-
-        J = 0  # Cost accumulator
-
-        # Constraints for each segment k
-        for k in range(K):
-            # Generates CasADi variables at collocation points
-            if k == 0:
-                Q.append(self.opti.variable(N[k] + 2, self.n_q))
-
-            else:
-                # Explicitly couples last of previous segment with first of current segment
-                # by setting them as the same variable
-                Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
-
-            dQ.append(self.opti.variable(N[k] + 2, self.n_q))
-            ddQ.append(self.opti.variable(N[k] + 2, self.n_q))
-
-            # Generation of LG collocation points
-            tau, w = np.polynomial.legendre.leggauss(N[k])  # w is the quadrature weights
-            tau = np.asarray([-1] + list(tau) + [1])
-            D = PSCollocation.generate_D(tau)  # Differentiation matrix
-
-            # Useful values for conversion between t and tau
-            norm_factor = (t[k + 1] - t[k]) / 2
-            t_tau_0 = (t[k + 1] + t[k]) / 2  # Global time t at tau = 0
-            t_tau = norm_factor * tau + t_tau_0  # Global time (t) at collocation points
-
-            self.opti.subject_to(norm_factor * dQ[k] == ca.mtimes(D, Q[k]))
-            self.opti.subject_to(norm_factor * ddQ[k] == ca.mtimes(D, dQ[k]))
-
-            # Continuity constraints
-            if k != 0:
-                self.opti.subject_to(dQ[k - 1][-1, :] == dQ[k][0, :])
-
-            # Collocati
-            for i, q_1 in enumerate(t_tau[:-1]):
-                n_l, n_r = self.track.state(np.array([q_1 * self.track.length]))[0][-2:]
-                self.opti.subject_to(
-                    self.opti.bounded(
-                        n_r + max(self.vehicle.prop.g_t) / 2 + self.vehicle.prop.bound_tol,
-                        Q[k][i],
-                        n_l - max(self.vehicle.prop.g_t) / 2 - self.vehicle.prop.bound_tol,
-                    )
-                )
-
-            curvature = np.sqrt(
-                np.sum(self.track.der_state(t_tau * self.track.length, 2)[:, :3] ** 2, axis=1)
-            )
-            b = self.track.tnb_better(t_tau * self.track.length)[2]
-
-            curvature[b[:, 2] < 0] *= -1
-
-            # Quadrature cost
-            for j in range(N[k]):
-                lagrange_term = (ddQ[k][j + 1, 0] + curvature[j + 1] * self.track.length**2)**2
-                J += norm_factor * w[j] * lagrange_term
-
-        # Periodicity
-        self.opti.subject_to(Q[-1][-1, :] == Q[0][0, :])
-        self.opti.subject_to(dQ[-1][-1, :] == dQ[0][0, :])
-
-        self.opti.minimize(J)
-
-        ipopt_settings = {
-            "print_time": 0,
-            "ipopt.sb": "no",
-            "ipopt.max_iter": 3000,
-            "detect_simple_bounds": True,
-            "ipopt.linear_solver": "ma97",
-            "ipopt.mu_strategy": "adaptive",
-            "ipopt.nlp_scaling_method": "gradient-based",
-            "ipopt.bound_relax_factor": 1e-6,
-            "ipopt.hessian_approximation": "exact",
-            "ipopt.tol": 1e-4,
-            # "ipopt.hessian_approximation": "limited-memory",
-            # "ipopt.limited_memory_max_history": 30,
-            # "ipopt.limited_memory_update_type": "bfgs",
-            "ipopt.derivative_test": "none",
-        }
-
-        if warm_start is not None:
-            ipopt_settings["ipopt.warm_start_init_point"] = "yes"
-            ipopt_settings["ipopt.warm_start_bound_push"] = 1e-6
-            ipopt_settings["ipopt.warm_start_mult_bound_push"] = 1e-6
-            ipopt_settings["ipopt.mu_init"] = 1e-1
-
-        # Solve!
-        try:
-            self.opti.solver("ipopt", ipopt_settings)
-        except Exception as e:
-            if "ipopt.linear_solver" in ipopt_settings:
-                print(
-                    f"Could not use solver {ipopt_settings['ipopt.linear_solver']}, using default!"
-                )
-                ipopt_settings["ipopt.linear_solver"] = "mumps"
-                self.opti.solver("ipopt", ipopt_settings)
-
-            else:
-                raise e
-
-        print(f"Solving with {self.opti.nx} variables.")
-        try:
-            sol = self.opti.solve()
-            stats = sol.stats()
-            print(f"Solve iteration succeeded in {stats['iter_count']} iterations")
-        except:
-            sol = self.opti.debug
-            stats = sol.stats()
-            print(f"Solve iteration failed after {stats['iter_count']} iteration...")
-
-        print(f"Final cost: {sol.value(J)}")
-
-        # Collect solution
-        Q_sol = [sol.value(seg) for seg in Q]
-        dQ_sol = [sol.value(seg) for seg in dQ]
-        ddQ_sol = [sol.value(seg) for seg in ddQ]
-
-        return Q_sol, dQ_sol, ddQ_sol
-
+from mlt.raceline_mc import MinCurvatureCollocation
+import scipy
 
 class MLTCollocation(PSCollocation):
 
@@ -172,7 +32,6 @@ class MLTCollocation(PSCollocation):
         K = len(N)
 
         Q_1_dot = []
-        Q_1_ddot = []
 
         # Q, dQ, ddQ are (N_k + 2) x (n_q).
         Q = []  # Array containing Q matrices. q_j = [theta, mu, phi, n_l, n_r].
@@ -196,10 +55,7 @@ class MLTCollocation(PSCollocation):
             # Generates CasADi variables at collocation points
             if k == 0:
                 Q.append(self.opti.variable(N[k] + 2, self.n_q))
-                # dQ.append(self.opti.variable(N[k] + 2, self.n_q))
-                # ddQ.append(self.opti.variable(N[k] + 2, self.n_q))
                 Q_1_dot.append(self.opti.variable(N[k] + 2, 1))
-                # Q_1_ddot.append(self.opti.variable(N[k] + 2, 1))
 
                 U.append(self.opti.variable(N[k] + 2, self.n_u))
                 Z.append(self.opti.variable(N[k] + 2, self.n_z))
@@ -208,18 +64,11 @@ class MLTCollocation(PSCollocation):
                 # Explicitly couples last of previous segment with first of current segment
                 # by setting them as the same variable
                 Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
-                # dQ.append(ca.vertcat(dQ[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
-                # ddQ.append(ca.vertcat(ddQ[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_q)))
-
                 Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
-                # Q_1_ddot.append(ca.vertcat(Q_1_ddot[k - 1][-1, :], self.opti.variable(N[k] + 1, 1)))
 
                 U.append(ca.vertcat(U[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_u)))
                 Z.append(ca.vertcat(Z[k - 1][-1, :], self.opti.variable(N[k] + 1, self.n_z)))
 
-            dQ.append(self.opti.variable(N[k] + 2, self.n_q))
-            ddQ.append(self.opti.variable(N[k] + 2, self.n_q))
-            Q_1_ddot.append(self.opti.variable(N[k] + 2, 1))
             # Q.append(self.opti.variable(N[k] + 2, self.n_q))
             # Q_1_dot.append(self.opti.variable(N[k] + 2, 1))
             # U.append(self.opti.variable(N[k] + 2, self.n_u))
@@ -236,20 +85,12 @@ class MLTCollocation(PSCollocation):
             t_tau = norm_factor * tau + t_tau_0  # Global time (t) at collocation points
 
             # Time derivative calculation
-            # dQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k]))
-            # ddQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ[k]))
-            # Q_1_ddot = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k]
-
-            # print(dQ[k][:-1, :].shape, D.shape, Q[k][:-1, :].shape)
-
-            # der_scale = (2 / (t[k + 1] - t[k]))
-
-            self.opti.subject_to(norm_factor * dQ[k] == ca.mtimes(D, Q[k]))
-            self.opti.subject_to(norm_factor * ddQ[k] == ca.mtimes(D, dQ[k]))
-            self.opti.subject_to(norm_factor * Q_1_ddot[k] == ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k])
+            dQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q[k]))
+            ddQ.append((2 / (t[k + 1] - t[k])) * ca.mtimes(D, dQ[k]))
+            Q_1_ddot = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, Q_1_dot[k]) * Q_1_dot[k]
 
             Q_dot.append(dQ[k] * Q_1_dot[k])
-            Q_ddot.append(ddQ[k] * Q_1_dot[k] ** 2 + dQ[k] * Q_1_ddot[k])
+            Q_ddot.append(ddQ[k] * Q_1_dot[k] ** 2 + dQ[k] * Q_1_ddot)
 
             # Continuity constraints
             if k != 0:
@@ -260,7 +101,7 @@ class MLTCollocation(PSCollocation):
                 self.vehicle.set_constraints(
                     q_1,
                     Q_1_dot[k][i, :],
-                    Q_1_ddot[k][i, :],
+                    Q_1_ddot[i, :],
                     Q_dot[k][i, :],
                     Q_ddot[k][i, :],
                     Q[k][i, :],
@@ -290,20 +131,27 @@ class MLTCollocation(PSCollocation):
             else:
                 # Cold start guesses
                 # Velocity
-                curvature = np.sqrt(
-                    np.sum(self.track.der_state(t_tau * self.track.length, 2)[:, :3] ** 2, axis=1)
-                )
-                b = self.track.tnb_better(t_tau * self.track.length)[2]
 
-                curvature[b[:, 2] < 0] *= -1
-                
-                real_curvature = ddq2[k] / self.track.length**2  + curvature
-                v_guess = np.sqrt(self.vehicle.prop.t_Dy1[0] * 9.81 / (np.abs(np.array(real_curvature)) + 1e-5))
+                min_curve_raceline = self.track.raceline(t_tau * self.track.length, q2[k])
+
+                dr = np.matmul(D, min_curve_raceline) / norm_factor
+                ddr = np.matmul(D, dr) / norm_factor
+
+                # raceline_interp = scipy.interpolate.BarycentricInterpolator(t_tau * self.track.length, min_curve_raceline)
+
+                # dr = raceline_interp.derivative(t_tau * self.track.length, der=1)
+                # ddr = raceline_interp.derivative(t_tau * self.track.length, der=2)
+
+                real_curvature = np.linalg.norm(np.cross(dr, ddr), axis=1) / (np.linalg.norm(dr, axis=1)**3 + 1e-10)
+
+                v_guess = 30 #np.sqrt(0.7 * self.vehicle.prop.t_Dy1[0] * 9.81 / (np.abs(np.array(real_curvature)) + 1e-10))
 
                 self.opti.set_initial(
-                    Q_1_dot[k][:, :],
-                    np.clip(v_guess, 5, 90) / self.track.length,
+                    Q_1_dot[k][:, :],   
+                    np.clip(v_guess, 10, 50) / self.track.length,
                 )
+
+                # v_guess = v_guess[:-1]
 
                 # Vertical tire forces
                 for i in range(2):
@@ -366,7 +214,7 @@ class MLTCollocation(PSCollocation):
             "ipopt.print_frequency_iter": 25,
             "print_time": 0,
             "ipopt.sb": "no",
-            "ipopt.max_iter": 3000,
+            "ipopt.max_iter": 5000,
             "detect_simple_bounds": True,
             "ipopt.linear_solver": "ma97",
             "ipopt.mu_strategy": "adaptive",
@@ -379,6 +227,7 @@ class MLTCollocation(PSCollocation):
             # "ipopt.limited_memory_update_type": "bfgs",
             "ipopt.derivative_test": "none",
         }
+
 
         if warm_start is not None:
             ipopt_settings["ipopt.warm_start_init_point"] = "yes"
@@ -404,10 +253,12 @@ class MLTCollocation(PSCollocation):
         try:
             sol = self.opti.solve()
             stats = sol.stats()
+            
             print(f"Solve iteration succeeded in {stats['iter_count']} iterations")
         except:
             sol = self.opti.debug
             stats = sol.stats()
+            
             print(f"Solve iteration failed after {stats['iter_count']} iteration...")
 
         print(f"Final cost: {sol.value(J)}")
@@ -474,7 +325,7 @@ class MLTCollocation(PSCollocation):
 if __name__ == "__main__":
 
     config = {
-        "track": "track_import/generated/COTA.json",
+        "track": "track_import/generated/track.json",
         # "track": "foo.json",
         "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
     }
@@ -497,12 +348,12 @@ if __name__ == "__main__":
     track = None
     # zandvoort 90 4
     # 120 fails to solve but almost converges
-    for n in [100]:
+    for n in [90]:
         print(f"{n} segments")
         mlt = MLTCollocation(config)
         mr = MeshRefinement(mlt, r_config)
 
-        track = mlt.iteration(np.linspace(0, 1, n), np.array([5] * (n - 1)), track)
+        track = mlt.iteration(np.linspace(0, 1, n), np.array([4] * (n - 1)), track)
         track.save("mlt/generated/testing.json")
 
         props = VehicleProperties.load_yaml("mlt/vehicle_properties/DallaraAV24.yaml")
@@ -511,7 +362,7 @@ if __name__ == "__main__":
         # Visualize
         fine_plot, _ = mr.colloc.track.plot_uniform(1)
 
-        traj.plot_collocation(plot_q=True)
+        traj.plot_collocation(plot_q=False)
 
         fig = go.Figure()
 
