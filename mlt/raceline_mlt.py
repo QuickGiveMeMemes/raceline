@@ -12,6 +12,7 @@ import plotly.express as px
 from mlt.raceline_mc import MinCurvatureCollocation
 import scipy
 
+
 class MLTCollocation(PSCollocation):
 
     n_q: int = 5
@@ -58,8 +59,12 @@ class MLTCollocation(PSCollocation):
                 Q.append(self.opti.variable(N[k] + 2, self.n_q))
                 Q_1_dot.append(self.opti.variable(N[k] + 2, 1))
             elif k == K - 1:
-                Q.append(ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k], self.n_q), Q[0][0, :]))
-                Q_1_dot.append(ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k], 1), Q_1_dot[0][0, :]))
+                Q.append(
+                    ca.vertcat(Q[k - 1][-1, :], self.opti.variable(N[k], self.n_q), Q[0][0, :])
+                )
+                Q_1_dot.append(
+                    ca.vertcat(Q_1_dot[k - 1][-1, :], self.opti.variable(N[k], 1), Q_1_dot[0][0, :])
+                )
             else:
                 # Explicitly couples last of previous segment with first of current segment
                 # by setting them as the same variable
@@ -122,9 +127,7 @@ class MLTCollocation(PSCollocation):
             # dU = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, U[k])
 
             for j in range(N[k]):
-                lagrange_term = MLTCollocation.cost(
-                    Q_1_dot[k][j + 1, :]
-                )
+                lagrange_term = MLTCollocation.cost(Q_1_dot[k][j + 1, :])
                 J += norm_factor * w[j] * lagrange_term
 
             # Initial guesses
@@ -132,9 +135,9 @@ class MLTCollocation(PSCollocation):
                 # Use given Trajectory for warm start
                 values = warm_start.linstate(t_tau * self.track.length)
 
-                self.opti.set_initial(U[k][:, :], values[:, 0:3])
+                self.opti.set_initial(U[k][:, :], values[:, 0:3][:-1])
                 self.opti.set_initial(Q[k][:, :], values[:, 3:8])
-                self.opti.set_initial(Z[k][:, :], values[:, 8:12])
+                self.opti.set_initial(Z[k][:, :], values[:, 8:12][:-1])
                 self.opti.set_initial(Q_1_dot[k][:, :], values[:, 12] / self.track.length)
 
             else:
@@ -142,6 +145,7 @@ class MLTCollocation(PSCollocation):
                 # Velocity
 
                 min_curve_raceline = self.track.raceline(t_tau * self.track.length, q2[k])
+                _, _, b = self.track.tnb(t_tau * self.track.length)
 
                 dr = np.matmul(D, min_curve_raceline) / norm_factor
                 ddr = np.matmul(D, dr) / norm_factor
@@ -151,12 +155,18 @@ class MLTCollocation(PSCollocation):
                 # dr = raceline_interp.derivative(t_tau * self.track.length, der=1)
                 # ddr = raceline_interp.derivative(t_tau * self.track.length, der=2)
 
-                real_curvature = np.linalg.norm(np.cross(dr, ddr), axis=1) / (np.linalg.norm(dr, axis=1)**3 + 1e-10)
+                cross = np.cross(dr, ddr)
 
-                v_guess = 30 #np.sqrt(0.7 * self.vehicle.prop.t_Dy1[0] * 9.81 / (np.abs(np.array(real_curvature)) + 1e-10))
+                real_curvature = (
+                    np.sign(np.sum(cross * b, axis=1))
+                    * np.linalg.norm(cross, axis=1)
+                    / (np.linalg.norm(dr, axis=1) ** 3 + 1e-10)
+                )
+
+                v_guess = 30  # np.sqrt(0.7 * self.vehicle.prop.t_Dy1[0] * 9.81 / (np.abs(np.array(real_curvature)) + 1e-10))
 
                 self.opti.set_initial(
-                    Q_1_dot[k][:, :],   
+                    Q_1_dot[k][:, :],
                     np.clip(v_guess, 10, 50) / self.track.length,
                 )
 
@@ -205,7 +215,7 @@ class MLTCollocation(PSCollocation):
 
                 # delta
                 wheelbase = sum(self.vehicle.prop.g_a)
-                delta_guess = np.atan(wheelbase * real_curvature)
+                delta_guess = np.atan(wheelbase * real_curvature) * 2
 
                 self.opti.set_initial(U[k][:, 2], delta_guess[:-1])
 
@@ -223,7 +233,7 @@ class MLTCollocation(PSCollocation):
             "ipopt.print_frequency_iter": 25,
             "print_time": 0,
             "ipopt.sb": "no",
-            "ipopt.max_iter": 5000,
+            "ipopt.max_iter": 3000,
             "detect_simple_bounds": True,
             "ipopt.linear_solver": "ma97",
             "ipopt.mu_strategy": "adaptive",
@@ -237,12 +247,13 @@ class MLTCollocation(PSCollocation):
             "ipopt.derivative_test": "none",
         }
 
-
         if warm_start is not None:
             ipopt_settings["ipopt.warm_start_init_point"] = "yes"
             ipopt_settings["ipopt.warm_start_bound_push"] = 1e-6
             ipopt_settings["ipopt.warm_start_mult_bound_push"] = 1e-6
             ipopt_settings["ipopt.mu_init"] = 1e-1
+
+        ipopt_settings["ipopt.mu_init"] = 1e-8
 
         # Solve!
         try:
@@ -262,20 +273,26 @@ class MLTCollocation(PSCollocation):
         try:
             sol = self.opti.solve()
             stats = sol.stats()
-            
+
             print(f"Solve iteration succeeded in {stats['iter_count']} iterations")
         except:
             sol = self.opti.debug
             stats = sol.stats()
-            
+
             print(f"Solve iteration failed after {stats['iter_count']} iteration...")
 
         print(f"Final cost: {sol.value(J)}")
 
         # Collect solution
-        U_sol = [np.vstack([sol.value(seg), sol.value(U[(i + 1) % len(U)][0, :])]) for i, seg in enumerate(U)]
+        U_sol = [
+            np.vstack([sol.value(seg), sol.value(U[(i + 1) % len(U)][0, :])])
+            for i, seg in enumerate(U)
+        ]
         Q_sol = [sol.value(seg) for seg in Q]
-        Z_sol = [np.vstack([sol.value(seg), sol.value(Z[(i + 1) % len(Z)][0, :])]) for i, seg in enumerate(Z)]
+        Z_sol = [
+            np.vstack([sol.value(seg), sol.value(Z[(i + 1) % len(Z)][0, :])])
+            for i, seg in enumerate(Z)
+        ]
         v_sol = [sol.value(seg) for seg in Q_1_dot]
 
         # print(U_sol)
@@ -291,7 +308,7 @@ class MLTCollocation(PSCollocation):
         # steer_bang_cost = ca.sumsqr(du[2])
         # ab_bang_cost = ca.sumsqr(du[0]) + ca.sumsqr(du[1])
 
-        return vel_cost # + steer_bang_cost * k_b
+        return vel_cost  # + steer_bang_cost * k_b
 
     def sample_cost(self, traj: Trajectory, points: np.ndarray) -> tuple[np.ndarray, float]:
         """
@@ -336,7 +353,7 @@ class MLTCollocation(PSCollocation):
 if __name__ == "__main__":
 
     config = {
-        "track": "track_import/generated/track.json",
+        "track": "track_import/generated/COTA.json",
         # "track": "foo.json",
         "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
     }
@@ -359,12 +376,12 @@ if __name__ == "__main__":
     track = None
     # zandvoort 90 4
     # 120 fails to solve but almost converges
-    for n in [150]:
+    for n in [60, 120]:
         print(f"{n} segments")
         mlt = MLTCollocation(config)
         mr = MeshRefinement(mlt, r_config)
 
-        track = mlt.iteration(np.linspace(0, 1, n), np.array([4] * (n - 1)), track)
+        track = mlt.iteration(np.linspace(0, 1, n), np.array([5] * (n - 1)), track)
         track.save("mlt/generated/testing.json")
 
         props = VehicleProperties.load_yaml("mlt/vehicle_properties/DallaraAV24.yaml")
