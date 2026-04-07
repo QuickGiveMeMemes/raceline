@@ -1,4 +1,5 @@
 import numpy as np
+import quadpy as qp
 import scipy.interpolate
 import plotly.graph_objects as go
 import json
@@ -42,8 +43,9 @@ class Trajectory:
         for k in range(len(Q)):
             # Number of collocation points
             N_k = len(Q[k]) - 2
-            tau, _ = np.polynomial.legendre.leggauss(N_k)
-            tau = np.asarray([-1] + list(tau) + [1])
+            # tau, _ = np.polynomial.legendre.leggauss(N_k)
+            tau = qp.c1.gauss_radau(N_k + 1).points
+            tau = np.asarray(list(tau) + [1])
             self.colloc_t.extend(self.tau_to_t(tau, k))       # misses last element but thats probably fine
 
             # print (U[k].shape, Q[k].shape, self.Z[k].shape, self.v[k].shape)

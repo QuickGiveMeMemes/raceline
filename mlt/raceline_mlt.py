@@ -6,6 +6,7 @@ from mlt.vehicle import Vehicle, VehicleProperties
 from mesh_refinement.collocation import PSCollocation
 from mesh_refinement.mesh_refinement import MeshRefinement
 import casadi as ca
+import quadpy as qp
 from mlt.trajectory import Trajectory
 import plotly.graph_objects as go
 import plotly.express as px
@@ -71,8 +72,13 @@ class MLTCollocation(PSCollocation):
             Z.append(self.opti.variable(N[k] + 1, self.n_z))
 
             # Generation of LG collocation points
-            tau, w = np.polynomial.legendre.leggauss(N[k])  # w is the quadrature weights
-            tau = np.asarray([-1] + list(tau) + [1])
+            # tau, w = np.polynomial.legendre.leggauss(N[k])  # w is the quadrature weights
+            # tau = np.asarray([-1] + list(tau) + [1])
+            scheme = qp.c1.gauss_radau(N[k] + 1)
+            tau = scheme.points
+            w = scheme.weights
+            tau = np.asarray(list(tau) + [1])
+            # print(tau)
             D = PSCollocation.generate_D(tau)  # Differentiation matrix
 
             # Useful values for conversion between t and tau
@@ -116,9 +122,9 @@ class MLTCollocation(PSCollocation):
             # Quadrature cost
             # dU = (2 / (t[k + 1] - t[k])) * ca.mtimes(D, U[k])
 
-            for j in range(N[k]):
+            for j in range(N[k] + 1):
                 lagrange_term = MLTCollocation.cost(
-                    Q_1_dot[k][j + 1, :]
+                    Q_1_dot[k][j, :]
                 )
                 J += norm_factor * w[j] * lagrange_term
 
