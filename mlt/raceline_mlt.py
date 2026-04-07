@@ -376,7 +376,7 @@ if __name__ == "__main__":
     track = None
     # zandvoort 90 4
     # 120 fails to solve but almost converges
-    for n in [120]:
+    for n in [200]:
         print(f"{n} segments")
         mlt = MLTCollocation(config)
         mr = MeshRefinement(mlt, r_config)
