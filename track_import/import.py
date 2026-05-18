@@ -1,35 +1,56 @@
-import os, sys
-
-sys.path.append(os.path.dirname(__file__))
-
 import argparse
 import yaml
-from track_fitting import fit_track
-from gpx_parsing import read_gpx_splines
-from scipy.interpolate import splev, splprep
+from track_import.track_fitting import fit_track
+from track_import.gpx_parsing import read_gpx_splines
 import plotly.graph_objects as go
-import numpy as np
+
+"""
+Interface for running track fitting
+"""
 
 if __name__ == "__main__":
-    RESOLUTION = 15
 
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--gpx_source", required=True, type=str, help="Source path to track gpx file."
+        "-g", 
+        "--gpx", 
+        required=True, 
+        type=str, 
+        help="Source path to track gpx file.",
     )
     parser.add_argument(
-        "--track_destination",
-        default="generated/track.json",
+        '-s',
+        "--savefile",
         type=str,
         help="Destination path of fitted track.",
     )
     parser.add_argument(
-        "--config", default="config/default.yaml", type=str, help="Path to config file."
+        '-c',
+        "--config", 
+        default="config/default.yaml", 
+        type=str, 
+        help="Path to config file.",
     )
-    parser.add_argument("--plot", default=False, action="store_true", help="Toggles on plotting.")
     parser.add_argument(
-        "--solver", default="mumps", type=str, help="Solver to use (mumps, ma57, ma86, ma97, etc.)."
+        "-p",
+        "--plot", 
+        default=False, 
+        action="store_true", 
+        help="Toggles on plotting.",
+    )
+    parser.add_argument(
+        "-r",
+        "--refine", 
+        default=False, 
+        action="store_true", 
+        help="Toggles mesh refinement.",
+    )
+    parser.add_argument(
+        "--solver", 
+        default="mumps", 
+        type=str, 
+        help="Solver to use (mumps, ma57, ma86, ma97, etc.).",
     )
 
     args = parser.parse_args()
@@ -51,10 +72,12 @@ if __name__ == "__main__":
             _,
         ),
         ccw,
-    ) = read_gpx_splines(args.gpx_source)
+    ) = read_gpx_splines(args.gpx)
 
-    track = fit_track(spline_c, spline_l, spline_r, max_dist, config_data["track_fitting"], ccw)
-    track.save(args.track_destination)
+    track = fit_track(spline_c, spline_l, spline_r, max_dist, config_data["track_fitting"], ccw, args.refine)
+
+    if args.savefile:
+        track.save(args.track_destination)
 
     if args.plot:
         plots = []

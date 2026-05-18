@@ -321,7 +321,7 @@ if __name__ == "__main__":
 
     config = {
         # "track": "track_import/generated/cota_test.json",
-        "track": "foo.json",
+        "track": "foo_il.json",
         "vehicle_properties": "mlt/vehicle_properties/DallaraAV24.yaml",
     }
     r_config = {

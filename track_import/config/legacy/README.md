@@ -1,0 +1,1 @@
+These are old configs that primarily use highly segmented collocation (more finite element than pseudospectral). They work alright but we highly recommend using the pseudospectral configs instead; they are generally better.

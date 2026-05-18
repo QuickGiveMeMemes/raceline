@@ -2,4 +2,3 @@ venv
 .vscode
 **/generated/*.json
 **/__pycache__
-*.c

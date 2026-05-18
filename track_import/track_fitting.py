@@ -271,6 +271,7 @@ def fit_track(
     max_dist: float,
     settings: dict,
     ccw: bool,
+    refine: bool,
 ) -> Track:
     """
     Fits a Track object
@@ -288,9 +289,9 @@ def fit_track(
     """
     cost_fn = PathCost(settings["cost_weights"], spline_c, spline_l, spline_r)
 
+
     initial_collocation = settings["refinement"]["initial_collocation"]
     initial_mesh_points = settings["refinement"]["initial_mesh_points"]
-    refinement_steps = settings["refinement"]["refinement_steps"]
 
     t = np.linspace(0, max_dist, initial_mesh_points)  # Mesh points
     N = np.array(
@@ -299,6 +300,13 @@ def fit_track(
 
     # Initial track
     track = fit_iteration(t, N, spline_c, spline_l, spline_r, cost_fn, settings["ipopt"], ccw)
+
+    if not refine:
+        return track
+
+    # Refinement stage
+
+    refinement_steps = settings["refinement"]["refinement_steps"]
 
     sample_t = np.linspace(
         0,
